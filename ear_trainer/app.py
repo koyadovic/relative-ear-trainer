@@ -162,6 +162,7 @@ class BaseTrainerTab(ttk.Frame):
         self._build_definition_selector()
         self._build_answer_area()
         self._build_controls()
+        self._sync_answer_buttons_with_selection()
         self._set_answer_buttons_enabled(False)
         self._bind_selection_persistence()
 
@@ -231,23 +232,21 @@ class BaseTrainerTab(ttk.Frame):
 
         grid_parent = ttk.Frame(outer)
         grid_parent.grid(row=0, column=0, sticky="new")
-        definition_columns = self._definition_columns()
-        for index, definition in enumerate(self.definitions):
-            row, column = divmod(index, definition_columns)
+        self.answer_grid_parent = grid_parent
+        for definition in self.definitions:
             button = ttk.Button(
                 grid_parent,
                 text=definition.name,
                 command=lambda name=definition.name: self._answer(name),
             )
-            button.grid(row=row, column=column, sticky="ew", padx=5, pady=4)
-            grid_parent.columnconfigure(column, weight=1, minsize=100)
             self.answer_buttons[definition.name] = button
 
-    def _definition_columns(self) -> int:
-        max_name_length = max((len(definition.name) for definition in self.definitions), default=0)
+    def _definition_columns(self, definitions: list[MusicDefinition] | None = None) -> int:
+        definitions = definitions or list(self.definitions)
+        max_name_length = max((len(definition.name) for definition in definitions), default=0)
         if max_name_length > 18:
             return 2
-        if len(self.definitions) > 24:
+        if len(definitions) > 24:
             return 8
         return 6
 
@@ -320,6 +319,7 @@ class BaseTrainerTab(ttk.Frame):
             variable.trace_add("write", lambda *_args: self._queue_selection_save())
 
     def _queue_selection_save(self) -> None:
+        self._sync_answer_buttons_with_selection()
         if self._selection_save_after_id is not None:
             self.after_cancel(self._selection_save_after_id)
         self._selection_save_after_id = self.after(250, self._save_selection)
@@ -342,6 +342,27 @@ class BaseTrainerTab(ttk.Frame):
             for definition in self.definitions
             if self.selection_vars[definition.name].get()
         ]
+
+    def _sync_answer_buttons_with_selection(self) -> None:
+        active_definitions = self._active_definitions()
+        active_names = {definition.name for definition in active_definitions}
+        definition_columns = self._definition_columns(active_definitions)
+
+        for column in range(max(8, definition_columns)):
+            self.answer_grid_parent.columnconfigure(column, weight=0, minsize=0)
+
+        for button in self.answer_buttons.values():
+            button.grid_remove()
+
+        for index, definition in enumerate(active_definitions):
+            row, column = divmod(index, definition_columns)
+            button = self.answer_buttons[definition.name]
+            button.grid(row=row, column=column, sticky="ew", padx=5, pady=4)
+            self.answer_grid_parent.columnconfigure(column, weight=1, minsize=100)
+
+        if self.running and self.current is not None and self.current.answer not in active_names:
+            self._set_answer_buttons_enabled(False)
+            self.status_var.set("Current answer was removed from selection")
 
     def _toggle_running(self) -> None:
         if self.running:
