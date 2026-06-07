@@ -8,13 +8,20 @@ from tkinter import messagebox, ttk
 
 from .config_loader import ConfigError
 from .midi import MidiNote, MidiPlayer, PlaybackError
-from .music import MusicDefinition, load_harmony_definitions, load_interval_definitions
+from .music import (
+    MusicDefinition,
+    ProgressionDefinition,
+    load_harmony_definitions,
+    load_interval_definitions,
+    load_progression_definitions,
+)
 from .settings import SettingsStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INTERVALS_PATH = PROJECT_ROOT / "config" / "intervals.yaml"
 HARMONIES_PATH = PROJECT_ROOT / "config" / "harmonies.yaml"
+PROGRESSIONS_PATH = PROJECT_ROOT / "config" / "progressions.yaml"
 
 TIMBRES = {
     "Piano": 0,
@@ -50,6 +57,10 @@ class EarTrainerApp(tk.Tk):
         try:
             interval_definitions = load_interval_definitions(INTERVALS_PATH)
             harmony_definitions = load_harmony_definitions(HARMONIES_PATH)
+            progression_definitions = load_progression_definitions(
+                PROGRESSIONS_PATH,
+                harmony_definitions,
+            )
         except ConfigError as exc:
             messagebox.showerror("Invalid configuration", str(exc))
             raise
@@ -67,6 +78,10 @@ class EarTrainerApp(tk.Tk):
         notebook.add(
             HarmonyTrainerTab(notebook, self.player, self.settings, harmony_definitions),
             text="Harmonies",
+        )
+        notebook.add(
+            ProgressionTrainerTab(notebook, self.player, self.settings, progression_definitions),
+            text="Harmonic Functions",
         )
 
     def _configure_style(self) -> None:
@@ -447,6 +462,46 @@ class HarmonyTrainerTab(BaseTrainerTab):
             MidiNote(start=0, duration=1280, pitch=root + semitone, velocity=84)
             for semitone in definition.semitones
         ]
+        return Challenge(answer=definition.name, program=self._choose_program(), notes=notes)
+
+
+class ProgressionTrainerTab(BaseTrainerTab):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        player: MidiPlayer,
+        settings: SettingsStore,
+        definitions: tuple[ProgressionDefinition, ...],
+    ) -> None:
+        super().__init__(
+            parent,
+            player,
+            settings,
+            "progressions",
+            definitions,
+            title="Harmonic function training",
+        )
+
+    def _build_challenge(self, definition: ProgressionDefinition) -> Challenge:
+        pitch_class = random.randrange(12)
+        tonic = 48 + pitch_class
+        chord_duration = 760
+        chord_step = 920
+        notes: list[MidiNote] = []
+
+        for index, chord in enumerate(definition.chords):
+            root = tonic + chord.degree_semitones
+            start = index * chord_step
+            for semitone in chord.harmony.semitones:
+                notes.append(
+                    MidiNote(
+                        start=start,
+                        duration=chord_duration,
+                        pitch=root + semitone,
+                        velocity=82,
+                    )
+                )
+
         return Challenge(answer=definition.name, program=self._choose_program(), notes=notes)
 
 

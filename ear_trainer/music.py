@@ -27,6 +27,21 @@ class MusicDefinition:
     formula: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ProgressionChord:
+    token: str
+    degree: str
+    degree_semitones: int
+    harmony: MusicDefinition
+
+
+@dataclass(frozen=True)
+class ProgressionDefinition:
+    name: str
+    mode: str
+    chords: tuple[ProgressionChord, ...]
+
+
 def load_interval_definitions(path: Path) -> tuple[MusicDefinition, ...]:
     data = load_yaml_file(path)
     section = data.get("intervals", data)
@@ -65,6 +80,27 @@ def load_harmony_definitions(path: Path) -> tuple[MusicDefinition, ...]:
 
     if not definitions:
         raise ConfigError(f"No harmony definitions found in {path}")
+    return tuple(definitions)
+
+
+def load_progression_definitions(
+    path: Path,
+    harmony_definitions: tuple[MusicDefinition, ...],
+) -> tuple[ProgressionDefinition, ...]:
+    data = load_yaml_file(path)
+    section = data.get("progressions", data)
+    harmonies_by_name = {definition.name: definition for definition in harmony_definitions}
+    definitions: list[ProgressionDefinition] = []
+
+    for name, value in _iter_definition_entries(section):
+        mode, tokens = _coerce_progression_tokens(value)
+        chords = tuple(_parse_progression_chord(token, harmonies_by_name) for token in tokens)
+        if not chords:
+            raise ConfigError(f"Progression {name!r} has an empty formula")
+        definitions.append(ProgressionDefinition(name=name, mode=mode, chords=chords))
+
+    if not definitions:
+        raise ConfigError(f"No progression definitions found in {path}")
     return tuple(definitions)
 
 
@@ -148,3 +184,95 @@ def _dedupe_preserving_order(values: Iterable[int]) -> tuple[int, ...]:
         result.append(value)
     return tuple(result)
 
+
+_ROMAN_DEGREE_SEMITONES = {
+    "I": 0,
+    "II": 2,
+    "III": 4,
+    "IV": 5,
+    "V": 7,
+    "VI": 9,
+    "VII": 11,
+}
+_ROMAN_DEGREES_BY_LENGTH = ("VII", "III", "VI", "IV", "II", "V", "I")
+
+
+def _coerce_progression_tokens(value: Any) -> tuple[str, tuple[str, ...]]:
+    mode = "major"
+
+    if isinstance(value, dict):
+        mode = str(value.get("mode", mode)).strip().lower()
+        chord_value = value.get("chords", value.get("progression", value.get("formula")))
+    elif isinstance(value, (list, tuple)):
+        values = [str(item).strip() for item in value if str(item).strip()]
+        if values and values[0].lower() in {"major", "minor"}:
+            mode = values[0].lower()
+            values = values[1:]
+        chord_value = values
+    else:
+        text = str(value).strip()
+        chord_value = text
+        for separator in ("|", ":"):
+            if separator not in text:
+                continue
+            left, right = text.split(separator, 1)
+            candidate_mode = left.strip().lower()
+            if candidate_mode in {"major", "minor"}:
+                mode = candidate_mode
+                chord_value = right
+            break
+
+    if mode not in {"major", "minor"}:
+        raise ConfigError(f"Progression mode must be major or minor, got {mode!r}")
+
+    tokens = _coerce_formula_tokens(chord_value, default=None)
+    return mode, tuple(token.rstrip(".") for token in tokens)
+
+
+def _parse_progression_chord(
+    token: str,
+    harmonies_by_name: dict[str, MusicDefinition],
+) -> ProgressionChord:
+    normalized = token.strip().replace("♭", "b").replace("♯", "#")
+    if not normalized:
+        raise ConfigError("Progression contains an empty chord token")
+
+    accidental_index = 0
+    while accidental_index < len(normalized) and normalized[accidental_index] in {"b", "#"}:
+        accidental_index += 1
+
+    accidental_text = normalized[:accidental_index]
+    remaining = normalized[accidental_index:]
+    upper_remaining = remaining.upper()
+
+    roman_degree = None
+    suffix = None
+    for candidate in _ROMAN_DEGREES_BY_LENGTH:
+        if upper_remaining.startswith(candidate):
+            roman_degree = candidate
+            suffix = remaining[len(candidate) :]
+            break
+
+    if roman_degree is None or suffix is None:
+        raise ConfigError(f"Invalid progression chord token {token!r}")
+
+    harmony_name = suffix or "Maj"
+    harmony = harmonies_by_name.get(harmony_name)
+    if harmony is None:
+        available = ", ".join(sorted(harmonies_by_name))
+        raise ConfigError(
+            f"Unknown harmony {harmony_name!r} in progression chord {token!r}. "
+            f"Available harmonies: {available}"
+        )
+
+    degree = accidental_text + roman_degree
+    semitone = _ROMAN_DEGREE_SEMITONES[roman_degree]
+    semitone += accidental_text.count("#")
+    semitone -= accidental_text.count("b")
+
+    return ProgressionChord(
+        token=normalized,
+        degree=degree,
+        degree_semitones=semitone,
+        harmony=harmony,
+    )
