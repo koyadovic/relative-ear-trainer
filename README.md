@@ -17,7 +17,7 @@ trainer, or configurable MIDI ear training tool.
 - Harmonic function training with configurable roman-numeral progressions.
 - YAML-based exercises for adding custom intervals, chords, and progressions.
 - General MIDI instruments including piano, guitar, violin, vibraphone, marimba,
-  flute, oboe, saxophone, trumpet, sine wave, and sitar.
+  flute, oboe, saxophone, trumpet, and sitar.
 - Short, medium, and long playback durations.
 - Persistent practice settings per tab.
 

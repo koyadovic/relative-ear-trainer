@@ -34,7 +34,6 @@ TIMBRES = {
     "Oboe": 68,
     "Saxophone": 65,
     "Trumpet": 56,
-    "Sine wave": 80,
     "Sitar": 104,
 }
 TIMBRE_COLUMNS = 6
