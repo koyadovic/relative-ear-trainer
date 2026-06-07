@@ -49,9 +49,9 @@ from `config/harmonies.yaml`, so `IIm7` uses the `m7` harmony formula and
 
 ```yaml
 progressions:
-  "Major ii-V-I": "major | IIm7, V7, IMaj7"
-  "Minor ii-V-i": "minor | IIm7b5, V7b9, Im"
-  "Minor bVI-bVII-i": "minor | bVIMaj7, bVII6, Im"
+  "IIm7, V7, IMaj7": "major | IIm7, V7, IMaj7"
+  "IIm7b5, V7b9, Im": "minor | IIm7b5, V7b9, Im"
+  "bVIMaj7, bVII6, Im": "minor | bVIMaj7, bVII6, Im"
 ```
 
 Roman degrees are based on the ionian major scale: `I`, `II`, `III`, `IV`, `V`,
@@ -86,3 +86,6 @@ You can force a specific soundfont:
 ```bash
 EAR_TRAINER_SOUNDFONT=/path/to/soundfont.sf2 ./run_app.sh
 ```
+
+Each training tab has a `Duration` selector with `Short`, `Medium`, and `Long`
+playback lengths.

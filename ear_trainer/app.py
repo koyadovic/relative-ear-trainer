@@ -39,6 +39,34 @@ TIMBRES = {
 TIMBRE_COLUMNS = 6
 RANDOM_LABEL = "Random"
 INTERVAL_MODES = ("Ascending", "Descending", "Harmonic", RANDOM_LABEL)
+DURATION_LABELS = ("Short", "Medium", "Long")
+DEFAULT_DURATION_LABEL = "Medium"
+DURATION_PROFILES = {
+    "Short": {
+        "melodic_note": 440,
+        "melodic_step": 560,
+        "simultaneous_note": 960,
+        "harmony_chord": 1280,
+        "progression_chord": 760,
+        "progression_step": 920,
+    },
+    "Medium": {
+        "melodic_note": 620,
+        "melodic_step": 760,
+        "simultaneous_note": 1320,
+        "harmony_chord": 1700,
+        "progression_chord": 1100,
+        "progression_step": 1280,
+    },
+    "Long": {
+        "melodic_note": 900,
+        "melodic_step": 1080,
+        "simultaneous_note": 1900,
+        "harmony_chord": 2400,
+        "progression_chord": 1600,
+        "progression_step": 1850,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -113,7 +141,9 @@ class BaseTrainerTab(ttk.Frame):
         self._selection_save_after_id: str | None = None
 
         self.timbre_var = tk.StringVar(value=RANDOM_LABEL)
+        self.duration_var = tk.StringVar(value=DEFAULT_DURATION_LABEL)
         self.status_var = tk.StringVar(value=f"MIDI: {self.player.describe_backend()}")
+        self.feedback_var = tk.StringVar(value="")
         self.score_var = tk.StringVar(value="Correct: 0/0")
         selected_names = self.settings.selected_names(
             self.settings_key,
@@ -126,7 +156,6 @@ class BaseTrainerTab(ttk.Frame):
         self.answer_buttons: dict[str, ttk.Button] = {}
 
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
         self.rowconfigure(2, weight=1)
 
         self._build_header()
@@ -141,7 +170,12 @@ class BaseTrainerTab(ttk.Frame):
         header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         header.columnconfigure(1, weight=1)
 
-        ttk.Label(header, text=self.title, style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header, text=self.title, style="Header.TLabel").grid(
+            row=0,
+            column=0,
+            rowspan=2,
+            sticky="w",
+        )
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
         for index, label in enumerate((*TIMBRES.keys(), RANDOM_LABEL)):
@@ -153,14 +187,23 @@ class BaseTrainerTab(ttk.Frame):
                 variable=self.timbre_var,
             ).grid(row=row, column=column, padx=4, sticky="w")
 
+        duration_frame = ttk.LabelFrame(header, text="Duration", padding=8)
+        duration_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
+        for column, label in enumerate(DURATION_LABELS):
+            ttk.Radiobutton(
+                duration_frame,
+                text=label,
+                value=label,
+                variable=self.duration_var,
+            ).grid(row=0, column=column, padx=4)
+
     def _build_definition_selector(self) -> None:
         outer = ttk.LabelFrame(self, text="Selection", padding=8)
-        outer.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+        outer.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(1, weight=1)
 
         buttons = ttk.Frame(outer)
-        buttons.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        buttons.grid(row=0, column=0, sticky="ew", pady=(0, 2))
         ttk.Button(buttons, text="All", command=lambda: self._set_all_selections(True)).pack(
             side=tk.LEFT
         )
@@ -168,9 +211,12 @@ class BaseTrainerTab(ttk.Frame):
             side=tk.LEFT, padx=(6, 0)
         )
 
-        grid_parent = self._scrollable_frame(outer, height=145)
+        definition_columns = self._definition_columns()
+        definition_rows = max(1, (len(self.definitions) + definition_columns - 1) // definition_columns)
+        selector_height = min(definition_rows, 6) * 30 + 2
+        grid_parent = self._scrollable_frame(outer, height=selector_height, expand=False)
         for index, definition in enumerate(self.definitions):
-            row, column = divmod(index, 6)
+            row, column = divmod(index, definition_columns)
             ttk.Checkbutton(
                 grid_parent,
                 text=definition.name,
@@ -183,9 +229,11 @@ class BaseTrainerTab(ttk.Frame):
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(0, weight=1)
 
-        grid_parent = self._scrollable_frame(outer, height=185)
+        grid_parent = ttk.Frame(outer)
+        grid_parent.grid(row=0, column=0, sticky="new")
+        definition_columns = self._definition_columns()
         for index, definition in enumerate(self.definitions):
-            row, column = divmod(index, 6)
+            row, column = divmod(index, definition_columns)
             button = ttk.Button(
                 grid_parent,
                 text=definition.name,
@@ -195,10 +243,18 @@ class BaseTrainerTab(ttk.Frame):
             grid_parent.columnconfigure(column, weight=1, minsize=100)
             self.answer_buttons[definition.name] = button
 
+    def _definition_columns(self) -> int:
+        max_name_length = max((len(definition.name) for definition in self.definitions), default=0)
+        if max_name_length > 18:
+            return 2
+        if len(self.definitions) > 24:
+            return 8
+        return 6
+
     def _build_controls(self) -> None:
         footer = ttk.Frame(self)
         footer.grid(row=3, column=0, sticky="ew")
-        footer.columnconfigure(2, weight=1)
+        footer.columnconfigure(3, weight=1)
 
         self.start_button = ttk.Button(footer, text="Start", command=self._toggle_running)
         self.start_button.grid(row=0, column=0, padx=(0, 6))
@@ -208,18 +264,33 @@ class BaseTrainerTab(ttk.Frame):
             command=self._replay_current,
             state=tk.DISABLED,
         )
-        self.replay_button.grid(row=0, column=1, padx=(0, 10))
-        ttk.Label(footer, textvariable=self.status_var, style="Result.TLabel").grid(
-            row=0, column=2, sticky="w"
+        self.replay_button.grid(row=0, column=1, padx=(0, 6))
+        self.next_button = ttk.Button(
+            footer,
+            text="Next",
+            command=self._next_challenge,
+            state=tk.DISABLED,
         )
-        ttk.Label(footer, textvariable=self.score_var).grid(row=0, column=3, sticky="e")
+        self.next_button.grid(row=0, column=2, padx=(0, 10))
+        ttk.Label(footer, textvariable=self.status_var, style="Result.TLabel").grid(
+            row=0, column=3, sticky="w"
+        )
+        ttk.Label(footer, textvariable=self.score_var).grid(row=0, column=4, sticky="e")
+        ttk.Label(footer, textvariable=self.feedback_var, style="Result.TLabel").grid(
+            row=1,
+            column=0,
+            columnspan=5,
+            sticky="w",
+            pady=(6, 0),
+        )
 
-    def _scrollable_frame(self, parent: tk.Widget, height: int) -> ttk.Frame:
+    def _scrollable_frame(self, parent: tk.Widget, height: int, expand: bool = True) -> ttk.Frame:
         container = ttk.Frame(parent)
         _columns, next_row = parent.grid_size()
-        container.grid(row=next_row, column=0, sticky="nsew")
+        container.grid(row=next_row, column=0, sticky="nsew" if expand else "ew")
         container.columnconfigure(0, weight=1)
-        container.rowconfigure(0, weight=1)
+        if expand:
+            container.rowconfigure(0, weight=1)
 
         canvas = tk.Canvas(container, height=height, highlightthickness=0)
         scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
@@ -227,7 +298,7 @@ class BaseTrainerTab(ttk.Frame):
 
         window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.grid(row=0, column=0, sticky="nsew")
+        canvas.grid(row=0, column=0, sticky="nsew" if expand else "ew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
         def update_scroll_region(_event: tk.Event[tk.Widget]) -> None:
@@ -287,9 +358,11 @@ class BaseTrainerTab(ttk.Frame):
         self.running = True
         self.correct_count = 0
         self.total_count = 0
+        self.feedback_var.set("")
         self.score_var.set("Correct: 0/0")
         self.start_button.configure(text="Stop")
         self.replay_button.configure(state=tk.NORMAL)
+        self.next_button.configure(state=tk.DISABLED)
         self._next_challenge()
 
     def _stop(self) -> None:
@@ -297,6 +370,7 @@ class BaseTrainerTab(ttk.Frame):
         self.current = None
         self.start_button.configure(text="Start")
         self.replay_button.configure(state=tk.DISABLED)
+        self.next_button.configure(state=tk.DISABLED)
         self._set_answer_buttons_enabled(False)
         self.status_var.set("Stopped")
 
@@ -313,6 +387,8 @@ class BaseTrainerTab(ttk.Frame):
         definition = random.choice(active_definitions)
         self.current = self._build_challenge(definition)
         self._set_answer_buttons_enabled(True)
+        self.next_button.configure(state=tk.DISABLED)
+        self.feedback_var.set("")
         self.status_var.set("Listen")
         self._play_current()
 
@@ -324,6 +400,12 @@ class BaseTrainerTab(ttk.Frame):
         if timbre_name == RANDOM_LABEL:
             timbre_name = random.choice(tuple(TIMBRES))
         return TIMBRES[timbre_name]
+
+    def _duration_profile(self) -> dict[str, int]:
+        return DURATION_PROFILES.get(
+            self.duration_var.get(),
+            DURATION_PROFILES[DEFAULT_DURATION_LABEL],
+        )
 
     def _play_current(self) -> None:
         if self.current is None:
@@ -344,13 +426,15 @@ class BaseTrainerTab(ttk.Frame):
         self.total_count += 1
         if correct:
             self.correct_count += 1
-            self.status_var.set(f"Correct: {self.current.answer}")
+            feedback = f"Correct: {self.current.answer}"
         else:
-            self.status_var.set(f"Wrong: it was {self.current.answer}")
+            feedback = f"Wrong: it was {self.current.answer}"
 
+        self.feedback_var.set(feedback)
+        self.status_var.set("Review the answer")
         self.score_var.set(f"Correct: {self.correct_count}/{self.total_count}")
         self._set_answer_buttons_enabled(False)
-        self.after(900, self._next_challenge)
+        self.next_button.configure(state=tk.NORMAL)
 
     def _set_answer_buttons_enabled(self, enabled: bool) -> None:
         state = tk.NORMAL if enabled else tk.DISABLED
@@ -384,7 +468,7 @@ class IntervalTrainerTab(BaseTrainerTab):
         ttk.Label(header, text=self.title, style="Header.TLabel").grid(
             row=0,
             column=0,
-            rowspan=2,
+            rowspan=3,
             sticky="w",
         )
 
@@ -409,31 +493,50 @@ class IntervalTrainerTab(BaseTrainerTab):
                 variable=self.interval_mode_var,
             ).grid(row=0, column=column, padx=4)
 
+        duration_frame = ttk.LabelFrame(header, text="Duration", padding=8)
+        duration_frame.grid(row=2, column=1, sticky="e", pady=(6, 0))
+        for column, label in enumerate(DURATION_LABELS):
+            ttk.Radiobutton(
+                duration_frame,
+                text=label,
+                value=label,
+                variable=self.duration_var,
+            ).grid(row=0, column=column, padx=4)
+
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         interval = definition.semitones[0]
         mode = self.interval_mode_var.get()
         if mode == RANDOM_LABEL:
             mode = random.choice(("Ascending", "Descending", "Harmonic"))
 
+        timing = self._duration_profile()
         pitch_class = random.randrange(12)
         if mode == "Ascending":
             root = 48 + pitch_class
             notes = [
-                MidiNote(start=0, duration=440, pitch=root),
-                MidiNote(start=560, duration=520, pitch=root + interval),
+                MidiNote(start=0, duration=timing["melodic_note"], pitch=root),
+                MidiNote(
+                    start=timing["melodic_step"],
+                    duration=timing["melodic_note"],
+                    pitch=root + interval,
+                ),
             ]
         elif mode == "Descending":
             root = 72 + pitch_class
             notes = [
-                MidiNote(start=0, duration=440, pitch=root),
-                MidiNote(start=560, duration=520, pitch=root - interval),
+                MidiNote(start=0, duration=timing["melodic_note"], pitch=root),
+                MidiNote(
+                    start=timing["melodic_step"],
+                    duration=timing["melodic_note"],
+                    pitch=root - interval,
+                ),
             ]
         else:
             root = 60 + pitch_class
-            notes = [MidiNote(start=0, duration=960, pitch=root)]
+            notes = [MidiNote(start=0, duration=timing["simultaneous_note"], pitch=root)]
             target = root + interval
             if target != root:
-                notes.append(MidiNote(start=0, duration=960, pitch=target))
+                notes.append(MidiNote(start=0, duration=timing["simultaneous_note"], pitch=target))
 
         return Challenge(answer=definition.name, program=self._choose_program(), notes=notes)
 
@@ -456,10 +559,16 @@ class HarmonyTrainerTab(BaseTrainerTab):
         )
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
+        timing = self._duration_profile()
         pitch_class = random.randrange(12)
         root = 48 + pitch_class
         notes = [
-            MidiNote(start=0, duration=1280, pitch=root + semitone, velocity=84)
+            MidiNote(
+                start=0,
+                duration=timing["harmony_chord"],
+                pitch=root + semitone,
+                velocity=84,
+            )
             for semitone in definition.semitones
         ]
         return Challenge(answer=definition.name, program=self._choose_program(), notes=notes)
@@ -483,20 +592,19 @@ class ProgressionTrainerTab(BaseTrainerTab):
         )
 
     def _build_challenge(self, definition: ProgressionDefinition) -> Challenge:
+        timing = self._duration_profile()
         pitch_class = random.randrange(12)
         tonic = 48 + pitch_class
-        chord_duration = 760
-        chord_step = 920
         notes: list[MidiNote] = []
 
         for index, chord in enumerate(definition.chords):
             root = tonic + chord.degree_semitones
-            start = index * chord_step
+            start = index * timing["progression_step"]
             for semitone in chord.harmony.semitones:
                 notes.append(
                     MidiNote(
                         start=start,
-                        duration=chord_duration,
+                        duration=timing["progression_chord"],
                         pitch=root + semitone,
                         velocity=82,
                     )
