@@ -24,7 +24,7 @@ trainer, or configurable MIDI ear training tool.
 ## Run
 
 ```bash
-./run_app.sh
+./app.sh
 ```
 
 Typical Linux requirements:
