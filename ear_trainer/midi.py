@@ -45,16 +45,16 @@ class MidiPlayer:
         if kind == "timidity":
             return "timidity"
         if kind == "aplaymidi":
-            return f"aplaymidi puerto {self._backend.port}"
-        return "Sin reproductor MIDI"
+            return f"aplaymidi port {self._backend.port}"
+        return "No MIDI player"
 
     def play(self, program: int, notes: list[MidiNote]) -> None:
         if not notes:
             return
         if self._backend.kind is None:
             raise PlaybackError(
-                "No encuentro reproductor MIDI. Instala fluidsynth y un soundfont GM, "
-                "por ejemplo: sudo apt install fluidsynth fluid-soundfont-gm"
+                "No MIDI player found. Install fluidsynth and a GM soundfont, "
+                "for example: sudo apt install fluidsynth fluid-soundfont-gm"
             )
 
         midi_bytes = build_midi(program=program, notes=notes)
@@ -90,7 +90,7 @@ class _Backend:
             return [self.executable, "-q", str(midi_path)]
         if self.kind == "aplaymidi" and self.executable and self.port:
             return [self.executable, "-p", self.port, str(midi_path)]
-        raise PlaybackError("Backend MIDI no configurado")
+        raise PlaybackError("MIDI backend is not configured")
 
 
 def build_midi(program: int, notes: list[MidiNote]) -> bytes:
@@ -168,4 +168,3 @@ def _varlen(value: int) -> bytes:
         else:
             break
     return bytes(result)
-

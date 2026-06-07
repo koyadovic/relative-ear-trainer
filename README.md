@@ -42,6 +42,19 @@ Supported accidentals: `b`, `#`, including double accidentals such as `bb7`.
 Extensions such as `b9`, `9`, `#11`, `b13`, and `13` are calculated in the
 corresponding octave.
 
+## Saved Practice Sets
+
+The app remembers the last selected interval and harmony sets. This lets you
+start with a small group, consolidate it, and gradually add more material.
+
+Selections are saved in:
+
+```text
+~/.config/relative-ear-trainer/settings.json
+```
+
+You can override the settings path with `EAR_TRAINER_SETTINGS`.
+
 ## MIDI
 
 The app generates temporary MIDI files and plays them with the first available

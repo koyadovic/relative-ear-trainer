@@ -9,6 +9,7 @@ from tkinter import messagebox, ttk
 from .config_loader import ConfigError
 from .midi import MidiNote, MidiPlayer, PlaybackError
 from .music import MusicDefinition, load_harmony_definitions, load_interval_definitions
+from .settings import SettingsStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -17,20 +18,20 @@ HARMONIES_PATH = PROJECT_ROOT / "config" / "harmonies.yaml"
 
 TIMBRES = {
     "Piano": 0,
-    "Guitarra": 24,
+    "Guitar": 24,
     "Violin": 40,
-    "Vibr\u00e1fono": 11,
+    "Vibraphone": 11,
     "Marimba": 12,
-    "Flauta": 73,
+    "Flute": 73,
     "Oboe": 68,
-    "Saxof\u00f3n": 65,
-    "Trompeta": 56,
+    "Saxophone": 65,
+    "Trumpet": 56,
     "Sine wave": 80,
     "Sitar": 104,
 }
 TIMBRE_COLUMNS = 6
-RANDOM_LABEL = "Aleatorio"
-INTERVAL_MODES = ("Ascendente", "Descendente", "Unisono", RANDOM_LABEL)
+RANDOM_LABEL = "Random"
+INTERVAL_MODES = ("Ascending", "Descending", "Harmonic", RANDOM_LABEL)
 
 
 @dataclass(frozen=True)
@@ -50,21 +51,22 @@ class EarTrainerApp(tk.Tk):
             interval_definitions = load_interval_definitions(INTERVALS_PATH)
             harmony_definitions = load_harmony_definitions(HARMONIES_PATH)
         except ConfigError as exc:
-            messagebox.showerror("Configuracion invalida", str(exc))
+            messagebox.showerror("Invalid configuration", str(exc))
             raise
 
         self.player = MidiPlayer()
+        self.settings = SettingsStore()
         self._configure_style()
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True)
         notebook.add(
-            IntervalTrainerTab(notebook, self.player, interval_definitions),
-            text="Intervalos",
+            IntervalTrainerTab(notebook, self.player, self.settings, interval_definitions),
+            text="Intervals",
         )
         notebook.add(
-            HarmonyTrainerTab(notebook, self.player, harmony_definitions),
-            text="Armonias",
+            HarmonyTrainerTab(notebook, self.player, self.settings, harmony_definitions),
+            text="Harmonies",
         )
 
     def _configure_style(self) -> None:
@@ -78,24 +80,34 @@ class BaseTrainerTab(ttk.Frame):
         self,
         parent: tk.Widget,
         player: MidiPlayer,
+        settings: SettingsStore,
+        settings_key: str,
         definitions: tuple[MusicDefinition, ...],
         title: str,
     ) -> None:
         super().__init__(parent, padding=12)
         self.player = player
+        self.settings = settings
+        self.settings_key = settings_key
         self.definitions = definitions
         self.title = title
         self.running = False
         self.current: Challenge | None = None
         self.correct_count = 0
         self.total_count = 0
+        self._selection_save_after_id: str | None = None
 
         self.timbre_var = tk.StringVar(value=RANDOM_LABEL)
         self.status_var = tk.StringVar(value=f"MIDI: {self.player.describe_backend()}")
-        self.score_var = tk.StringVar(value="Aciertos: 0/0")
-        self.selection_vars = {
-            definition.name: tk.BooleanVar(value=True) for definition in self.definitions
-        }
+        self.score_var = tk.StringVar(value="Correct: 0/0")
+        selected_names = self.settings.selected_names(
+            self.settings_key,
+            [definition.name for definition in self.definitions],
+        )
+        self.selection_vars = {}
+        for definition in self.definitions:
+            selected = True if selected_names is None else definition.name in selected_names
+            self.selection_vars[definition.name] = tk.BooleanVar(value=selected)
         self.answer_buttons: dict[str, ttk.Button] = {}
 
         self.columnconfigure(0, weight=1)
@@ -107,6 +119,7 @@ class BaseTrainerTab(ttk.Frame):
         self._build_answer_area()
         self._build_controls()
         self._set_answer_buttons_enabled(False)
+        self._bind_selection_persistence()
 
     def _build_header(self) -> None:
         header = ttk.Frame(self)
@@ -114,7 +127,7 @@ class BaseTrainerTab(ttk.Frame):
         header.columnconfigure(1, weight=1)
 
         ttk.Label(header, text=self.title, style="Header.TLabel").grid(row=0, column=0, sticky="w")
-        timbre_frame = ttk.LabelFrame(header, text="Timbre", padding=8)
+        timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
         for index, label in enumerate((*TIMBRES.keys(), RANDOM_LABEL)):
             row, column = divmod(index, TIMBRE_COLUMNS)
@@ -126,17 +139,17 @@ class BaseTrainerTab(ttk.Frame):
             ).grid(row=row, column=column, padx=4, sticky="w")
 
     def _build_definition_selector(self) -> None:
-        outer = ttk.LabelFrame(self, text="Seleccion", padding=8)
+        outer = ttk.LabelFrame(self, text="Selection", padding=8)
         outer.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(1, weight=1)
 
         buttons = ttk.Frame(outer)
         buttons.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ttk.Button(buttons, text="Todo", command=lambda: self._set_all_selections(True)).pack(
+        ttk.Button(buttons, text="All", command=lambda: self._set_all_selections(True)).pack(
             side=tk.LEFT
         )
-        ttk.Button(buttons, text="Nada", command=lambda: self._set_all_selections(False)).pack(
+        ttk.Button(buttons, text="None", command=lambda: self._set_all_selections(False)).pack(
             side=tk.LEFT, padx=(6, 0)
         )
 
@@ -150,7 +163,7 @@ class BaseTrainerTab(ttk.Frame):
             ).grid(row=row, column=column, sticky="w", padx=8, pady=3)
 
     def _build_answer_area(self) -> None:
-        outer = ttk.LabelFrame(self, text="Respuesta", padding=8)
+        outer = ttk.LabelFrame(self, text="Answer", padding=8)
         outer.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(0, weight=1)
@@ -172,11 +185,11 @@ class BaseTrainerTab(ttk.Frame):
         footer.grid(row=3, column=0, sticky="ew")
         footer.columnconfigure(2, weight=1)
 
-        self.start_button = ttk.Button(footer, text="Iniciar", command=self._toggle_running)
+        self.start_button = ttk.Button(footer, text="Start", command=self._toggle_running)
         self.start_button.grid(row=0, column=0, padx=(0, 6))
         self.replay_button = ttk.Button(
             footer,
-            text="Reproducir",
+            text="Replay",
             command=self._replay_current,
             state=tk.DISABLED,
         )
@@ -216,6 +229,27 @@ class BaseTrainerTab(ttk.Frame):
         for variable in self.selection_vars.values():
             variable.set(selected)
 
+    def _bind_selection_persistence(self) -> None:
+        for variable in self.selection_vars.values():
+            variable.trace_add("write", lambda *_args: self._queue_selection_save())
+
+    def _queue_selection_save(self) -> None:
+        if self._selection_save_after_id is not None:
+            self.after_cancel(self._selection_save_after_id)
+        self._selection_save_after_id = self.after(250, self._save_selection)
+
+    def _save_selection(self) -> None:
+        self._selection_save_after_id = None
+        selected_names = [
+            definition.name
+            for definition in self.definitions
+            if self.selection_vars[definition.name].get()
+        ]
+        try:
+            self.settings.save_selected_names(self.settings_key, selected_names)
+        except OSError as exc:
+            self.status_var.set(f"Could not save selection: {exc}")
+
     def _active_definitions(self) -> list[MusicDefinition]:
         return [
             definition
@@ -231,24 +265,25 @@ class BaseTrainerTab(ttk.Frame):
 
     def _start(self) -> None:
         if not self._active_definitions():
-            self.status_var.set("Selecciona al menos una opcion")
+            self.status_var.set("Select at least one option")
             return
 
+        self._save_selection()
         self.running = True
         self.correct_count = 0
         self.total_count = 0
-        self.score_var.set("Aciertos: 0/0")
-        self.start_button.configure(text="Parar")
+        self.score_var.set("Correct: 0/0")
+        self.start_button.configure(text="Stop")
         self.replay_button.configure(state=tk.NORMAL)
         self._next_challenge()
 
     def _stop(self) -> None:
         self.running = False
         self.current = None
-        self.start_button.configure(text="Iniciar")
+        self.start_button.configure(text="Start")
         self.replay_button.configure(state=tk.DISABLED)
         self._set_answer_buttons_enabled(False)
-        self.status_var.set("Detenido")
+        self.status_var.set("Stopped")
 
     def _next_challenge(self) -> None:
         if not self.running:
@@ -257,13 +292,13 @@ class BaseTrainerTab(ttk.Frame):
         active_definitions = self._active_definitions()
         if not active_definitions:
             self._stop()
-            self.status_var.set("Selecciona al menos una opcion")
+            self.status_var.set("Select at least one option")
             return
 
         definition = random.choice(active_definitions)
         self.current = self._build_challenge(definition)
         self._set_answer_buttons_enabled(True)
-        self.status_var.set("Escucha")
+        self.status_var.set("Listen")
         self._play_current()
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
@@ -294,11 +329,11 @@ class BaseTrainerTab(ttk.Frame):
         self.total_count += 1
         if correct:
             self.correct_count += 1
-            self.status_var.set(f"Correcto: {self.current.answer}")
+            self.status_var.set(f"Correct: {self.current.answer}")
         else:
-            self.status_var.set(f"Error: era {self.current.answer}")
+            self.status_var.set(f"Wrong: it was {self.current.answer}")
 
-        self.score_var.set(f"Aciertos: {self.correct_count}/{self.total_count}")
+        self.score_var.set(f"Correct: {self.correct_count}/{self.total_count}")
         self._set_answer_buttons_enabled(False)
         self.after(900, self._next_challenge)
 
@@ -313,10 +348,18 @@ class IntervalTrainerTab(BaseTrainerTab):
         self,
         parent: tk.Widget,
         player: MidiPlayer,
+        settings: SettingsStore,
         definitions: tuple[MusicDefinition, ...],
     ) -> None:
         self.interval_mode_var = tk.StringVar(master=parent, value=RANDOM_LABEL)
-        super().__init__(parent, player, definitions, title="Entrenamiento de intervalos")
+        super().__init__(
+            parent,
+            player,
+            settings,
+            "intervals",
+            definitions,
+            title="Interval training",
+        )
 
     def _build_header(self) -> None:
         header = ttk.Frame(self)
@@ -330,7 +373,7 @@ class IntervalTrainerTab(BaseTrainerTab):
             sticky="w",
         )
 
-        timbre_frame = ttk.LabelFrame(header, text="Timbre", padding=8)
+        timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
         for index, label in enumerate((*TIMBRES.keys(), RANDOM_LABEL)):
             row, column = divmod(index, TIMBRE_COLUMNS)
@@ -341,7 +384,7 @@ class IntervalTrainerTab(BaseTrainerTab):
                 variable=self.timbre_var,
             ).grid(row=row, column=column, padx=4, sticky="w")
 
-        mode_frame = ttk.LabelFrame(header, text="Modo", padding=8)
+        mode_frame = ttk.LabelFrame(header, text="Mode", padding=8)
         mode_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
         for column, label in enumerate(INTERVAL_MODES):
             ttk.Radiobutton(
@@ -355,16 +398,16 @@ class IntervalTrainerTab(BaseTrainerTab):
         interval = definition.semitones[0]
         mode = self.interval_mode_var.get()
         if mode == RANDOM_LABEL:
-            mode = random.choice(("Ascendente", "Descendente", "Unisono"))
+            mode = random.choice(("Ascending", "Descending", "Harmonic"))
 
         pitch_class = random.randrange(12)
-        if mode == "Ascendente":
+        if mode == "Ascending":
             root = 48 + pitch_class
             notes = [
                 MidiNote(start=0, duration=440, pitch=root),
                 MidiNote(start=560, duration=520, pitch=root + interval),
             ]
-        elif mode == "Descendente":
+        elif mode == "Descending":
             root = 72 + pitch_class
             notes = [
                 MidiNote(start=0, duration=440, pitch=root),
@@ -385,9 +428,17 @@ class HarmonyTrainerTab(BaseTrainerTab):
         self,
         parent: tk.Widget,
         player: MidiPlayer,
+        settings: SettingsStore,
         definitions: tuple[MusicDefinition, ...],
     ) -> None:
-        super().__init__(parent, player, definitions, title="Entrenamiento de armonias")
+        super().__init__(
+            parent,
+            player,
+            settings,
+            "harmonies",
+            definitions,
+            title="Harmony training",
+        )
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         pitch_class = random.randrange(12)
