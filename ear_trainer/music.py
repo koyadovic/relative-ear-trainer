@@ -91,9 +91,24 @@ def load_progression_definitions(
     section = data.get("progressions", data)
     harmonies_by_name = {definition.name: definition for definition in harmony_definitions}
     definitions: list[ProgressionDefinition] = []
+    seen_names: dict[str, tuple[str, tuple[str, ...]]] = {}
 
-    for name, value in _iter_definition_entries(section):
+    for name, value in _iter_progression_entries(section):
         mode, tokens = _coerce_progression_tokens(value)
+        if name is None:
+            name = _progression_name_from_tokens(tokens)
+
+        signature = (mode, tokens)
+        existing_signature = seen_names.get(name)
+        if existing_signature == signature:
+            continue
+        if existing_signature is not None:
+            raise ConfigError(
+                f"Duplicate progression name {name!r} with a different formula. "
+                "Use unique names or the list format."
+            )
+        seen_names[name] = signature
+
         chords = tuple(_parse_progression_chord(token, harmonies_by_name) for token in tokens)
         if not chords:
             raise ConfigError(f"Progression {name!r} has an empty formula")
@@ -197,6 +212,27 @@ _ROMAN_DEGREE_SEMITONES = {
 _ROMAN_DEGREES_BY_LENGTH = ("VII", "III", "VI", "IV", "II", "V", "I")
 
 
+def _iter_progression_entries(section: Any) -> Iterable[tuple[str | None, Any]]:
+    if isinstance(section, dict):
+        for name, value in section.items():
+            yield str(name), value
+        return
+
+    if isinstance(section, list):
+        for index, item in enumerate(section, start=1):
+            if isinstance(item, str) or isinstance(item, (list, tuple)):
+                yield None, item
+                continue
+            if isinstance(item, dict):
+                name = item.get("name")
+                yield str(name) if name else None, item
+                continue
+            raise ConfigError(f"Progression list item #{index} has an unsupported format")
+        return
+
+    raise ConfigError("Progressions must be a mapping or a list")
+
+
 def _coerce_progression_tokens(value: Any) -> tuple[str, tuple[str, ...]]:
     mode = "major"
 
@@ -227,6 +263,10 @@ def _coerce_progression_tokens(value: Any) -> tuple[str, tuple[str, ...]]:
 
     tokens = _coerce_formula_tokens(chord_value, default=None)
     return mode, tuple(token.rstrip(".") for token in tokens)
+
+
+def _progression_name_from_tokens(tokens: tuple[str, ...]) -> str:
+    return ", ".join(tokens)
 
 
 def _parse_progression_chord(

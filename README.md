@@ -49,14 +49,16 @@ from `config/harmonies.yaml`, so `IIm7` uses the `m7` harmony formula and
 
 ```yaml
 progressions:
-  "IIm7, V7, IMaj7": "major | IIm7, V7, IMaj7"
-  "IIm7b5, V7b9, Im": "minor | IIm7b5, V7b9, Im"
-  "bVIMaj7, bVII6, Im": "minor | bVIMaj7, bVII6, Im"
+  - "IIm7, V7, IMaj7"
+  - "IIm7b5, V7b9, Im"
+  - "bVIMaj7, bVII6, Im"
 ```
 
 Roman degrees are based on the ionian major scale: `I`, `II`, `III`, `IV`, `V`,
 `VI`, `VII`. Minor-mode progressions should write the natural-minor alterations
 explicitly, for example `bIII`, `bVI`, and `bVII`.
+
+The visible answer is the chord list itself.
 
 ## Saved Practice Sets
 

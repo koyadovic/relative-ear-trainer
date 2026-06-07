@@ -41,6 +41,19 @@ def _minimal_yaml_load(text: str) -> dict[str, Any]:
 
         indent = len(line) - len(line.lstrip(" "))
         stripped = line.strip()
+
+        if indent > 0 and stripped.startswith("- "):
+            if current_section is None:
+                raise ConfigError(f"Unexpected list item at line {line_number}: {raw_line}")
+            current_value = data.get(current_section)
+            if current_value == {}:
+                current_value = []
+                data[current_section] = current_value
+            if not isinstance(current_value, list):
+                raise ConfigError(f"Mixed mapping and list values at line {line_number}: {raw_line}")
+            current_value.append(_parse_scalar(stripped[2:].strip()))
+            continue
+
         key, value = _split_key_value(stripped, line_number)
 
         if indent == 0:
@@ -54,6 +67,9 @@ def _minimal_yaml_load(text: str) -> dict[str, Any]:
 
         if current_section is None or not isinstance(data.get(current_section), dict):
             raise ConfigError(f"Unexpected indented line {line_number}: {raw_line}")
+
+        if not isinstance(data.get(current_section), dict):
+            raise ConfigError(f"Unexpected mapping entry at line {line_number}: {raw_line}")
         data[current_section][key] = _parse_scalar(value)
 
     return data
@@ -157,4 +173,3 @@ def _unquote(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
     return value
-
