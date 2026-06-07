@@ -20,6 +20,7 @@ trainer, or configurable MIDI ear training tool.
   flute, oboe, saxophone, trumpet, and sitar.
 - Short, medium, and long playback durations.
 - Persistent practice settings per tab.
+- Persistent per-answer accuracy stats with a per-tab reset.
 
 ## Run
 
@@ -90,7 +91,11 @@ instrument, playback duration, mode, active harmony inversions, and the active
 tab. This lets you start with a small group, consolidate it, and gradually add
 more material without rebuilding the same setup every time.
 
-Selections are saved in:
+Each answer also tracks attempts, correct answers, and accuracy percentage.
+Stats are saved per tab and can be reset from that tab without affecting the
+others.
+
+Settings and stats are saved in:
 
 ```text
 ~/.config/relative-ear-trainer/settings.json

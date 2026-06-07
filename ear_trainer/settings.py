@@ -58,6 +58,22 @@ class SettingsStore:
         section_data.update(values)
         self._save()
 
+    def stats(self, section: str) -> dict[str, dict[str, int]]:
+        raw_stats = self._section_data(section).get("stats", {})
+        if not isinstance(raw_stats, dict):
+            return {}
+        return _normalize_stats(raw_stats)
+
+    def save_stats(self, section: str, stats: dict[str, dict[str, int]]) -> None:
+        section_data = self._ensure_section_data(section)
+        section_data["stats"] = _normalize_stats(stats)
+        self._save()
+
+    def reset_stats(self, section: str) -> None:
+        section_data = self._ensure_section_data(section)
+        section_data["stats"] = {}
+        self._save()
+
     def _section_data(self, section: str) -> dict[str, Any]:
         section_data = self._data.get(section, {})
         if not isinstance(section_data, dict):
@@ -113,3 +129,21 @@ def default_settings_path() -> Path:
         base_path = Path.home() / ".config"
 
     return base_path / APP_CONFIG_DIR / SETTINGS_FILENAME
+
+
+def _coerce_non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_stats(raw_stats: dict[str, Any]) -> dict[str, dict[str, int]]:
+    stats: dict[str, dict[str, int]] = {}
+    for name, raw_value in raw_stats.items():
+        if not isinstance(raw_value, dict):
+            continue
+        attempts = _coerce_non_negative_int(raw_value.get("attempts"))
+        correct = min(_coerce_non_negative_int(raw_value.get("correct")), attempts)
+        stats[str(name)] = {"correct": correct, "attempts": attempts}
+    return stats

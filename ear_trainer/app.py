@@ -221,6 +221,7 @@ class BaseTrainerTab(ttk.Frame):
             selected = True if selected_names is None else definition.name in selected_names
             self.selection_vars[definition.name] = tk.BooleanVar(value=selected)
         self.answer_buttons: dict[str, ttk.Button] = {}
+        self.answer_stats = self.settings.stats(self.settings_key)
         self.selection_controls: list[tk.Widget] = []
         self.definition_checkbuttons: list[ttk.Checkbutton] = []
         self.definition_grid_parent: ttk.Frame | None = None
@@ -322,7 +323,7 @@ class BaseTrainerTab(ttk.Frame):
         for definition in self.definitions:
             button = ttk.Button(
                 grid_parent,
-                text=definition.name,
+                text=self._answer_button_text(definition.name),
                 command=lambda name=definition.name: self._answer(name),
             )
             self.answer_buttons[definition.name] = button
@@ -395,7 +396,7 @@ class BaseTrainerTab(ttk.Frame):
     def _build_controls(self) -> None:
         footer = ttk.Frame(self)
         footer.grid(row=3, column=0, sticky="ew")
-        footer.columnconfigure(3, weight=1)
+        footer.columnconfigure(4, weight=1)
 
         self.start_button = ttk.Button(footer, text="Start", command=self._toggle_running)
         self.start_button.grid(row=0, column=0, padx=(0, 6))
@@ -413,14 +414,20 @@ class BaseTrainerTab(ttk.Frame):
             state=tk.DISABLED,
         )
         self.next_button.grid(row=0, column=2, padx=(0, 10))
-        ttk.Label(footer, textvariable=self.status_var, style="Result.TLabel").grid(
-            row=0, column=3, sticky="w"
+        self.reset_stats_button = ttk.Button(
+            footer,
+            text="Reset Stats",
+            command=self._reset_stats,
         )
-        ttk.Label(footer, textvariable=self.score_var).grid(row=0, column=4, sticky="e")
+        self.reset_stats_button.grid(row=0, column=3, padx=(0, 10))
+        ttk.Label(footer, textvariable=self.status_var, style="Result.TLabel").grid(
+            row=0, column=4, sticky="w"
+        )
+        ttk.Label(footer, textvariable=self.score_var).grid(row=0, column=5, sticky="e")
         ttk.Label(footer, textvariable=self.feedback_var, style="Result.TLabel").grid(
             row=1,
             column=0,
-            columnspan=5,
+            columnspan=6,
             sticky="w",
             pady=(6, 0),
         )
@@ -515,6 +522,7 @@ class BaseTrainerTab(ttk.Frame):
         for index, definition in enumerate(active_definitions):
             row, column = divmod(index, definition_columns)
             button = self.answer_buttons[definition.name]
+            button.configure(text=self._answer_button_text(definition.name))
             button.grid(row=row, column=column, sticky="ew", padx=5, pady=4)
             self.answer_grid_parent.columnconfigure(column, weight=1, minsize=100)
 
@@ -613,11 +621,54 @@ class BaseTrainerTab(ttk.Frame):
         else:
             feedback = f"Wrong: it was {self.current.answer}"
 
+        stats_error = self._record_answer_stat(self.current.answer, correct)
         self.feedback_var.set(feedback)
-        self.status_var.set("Review the answer")
+        self.status_var.set(stats_error or "Review the answer")
         self.score_var.set(f"Correct: {self.correct_count}/{self.total_count}")
         self._set_answer_buttons_enabled(False)
         self.next_button.configure(state=tk.NORMAL)
+
+    def _record_answer_stat(self, answer: str, correct: bool) -> str | None:
+        answer_stats = self.answer_stats.setdefault(answer, {"correct": 0, "attempts": 0})
+        answer_stats["attempts"] += 1
+        if correct:
+            answer_stats["correct"] += 1
+        error: str | None = None
+        try:
+            self.settings.save_stats(self.settings_key, self.answer_stats)
+        except OSError as exc:
+            error = f"Could not save stats: {exc}"
+        self._refresh_answer_button_texts()
+        return error
+
+    def _reset_stats(self) -> None:
+        if not messagebox.askyesno("Reset stats", f"Reset stats for {self.title}?"):
+            return
+
+        self.answer_stats = {}
+        try:
+            self.settings.reset_stats(self.settings_key)
+        except OSError as exc:
+            self.status_var.set(f"Could not reset stats: {exc}")
+            return
+        self._refresh_answer_button_texts()
+        self.status_var.set("Stats reset")
+
+    def _refresh_answer_button_texts(self) -> None:
+        for answer, button in self.answer_buttons.items():
+            button.configure(text=self._answer_button_text(answer))
+
+    def _answer_button_text(self, answer: str) -> str:
+        return f"{answer}  {self._answer_stat_label(answer)}"
+
+    def _answer_stat_label(self, answer: str) -> str:
+        answer_stats = self.answer_stats.get(answer, {})
+        attempts = int(answer_stats.get("attempts", 0))
+        correct = int(answer_stats.get("correct", 0))
+        if attempts == 0:
+            return "--% (0/0)"
+        percentage = round((correct / attempts) * 100)
+        return f"{percentage}% ({correct}/{attempts})"
 
     def _set_answer_buttons_enabled(self, enabled: bool) -> None:
         state = tk.NORMAL if enabled else tk.DISABLED
@@ -862,7 +913,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
                 answer_name = self._answer_name(definition, inversion)
                 button = ttk.Button(
                     grid_parent,
-                    text=answer_name,
+                    text=self._answer_button_text(answer_name),
                     command=lambda name=answer_name: self._answer(name),
                 )
                 self.answer_buttons[answer_name] = button
@@ -904,6 +955,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         for index, answer_name in enumerate(active_answers):
             row, column = divmod(index, answer_columns)
             button = self.answer_buttons[answer_name]
+            button.configure(text=self._answer_button_text(answer_name))
             button.grid(row=row, column=column, sticky="ew", padx=5, pady=4)
             self.answer_grid_parent.columnconfigure(column, weight=1, minsize=125)
 
