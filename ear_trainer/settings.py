@@ -18,26 +18,58 @@ class SettingsStore:
         self._data = self._load()
 
     def selected_names(self, section: str, available_names: list[str]) -> set[str] | None:
-        raw_selected = self._data.get(section, {}).get("selected")
+        return self.selected_values(section, "selected", available_names)
+
+    def selected_values(
+        self,
+        section: str,
+        key: str,
+        available_values: list[str],
+    ) -> set[str] | None:
+        raw_selected = self._section_data(section).get(key)
         if raw_selected is None:
             return None
         if not isinstance(raw_selected, list):
             return None
 
-        available = set(available_names)
+        available = set(available_values)
         selected = {str(name) for name in raw_selected if str(name) in available}
         if raw_selected and not selected:
             return None
         return selected
 
+    def option(
+        self,
+        section: str,
+        key: str,
+        available_values: list[str],
+        default: str,
+    ) -> str:
+        raw_value = self._section_data(section).get(key)
+        if isinstance(raw_value, str) and raw_value in set(available_values):
+            return raw_value
+        return default
+
     def save_selected_names(self, section: str, selected_names: list[str]) -> None:
+        self.save_section(section, {"selected": selected_names})
+
+    def save_section(self, section: str, values: dict[str, Any]) -> None:
+        section_data = self._ensure_section_data(section)
+        section_data.update(values)
+        self._save()
+
+    def _section_data(self, section: str) -> dict[str, Any]:
+        section_data = self._data.get(section, {})
+        if not isinstance(section_data, dict):
+            return {}
+        return section_data
+
+    def _ensure_section_data(self, section: str) -> dict[str, Any]:
         section_data = self._data.setdefault(section, {})
         if not isinstance(section_data, dict):
             section_data = {}
             self._data[section] = section_data
-
-        section_data["selected"] = selected_names
-        self._save()
+        return section_data
 
     def _load(self) -> dict[str, Any]:
         try:

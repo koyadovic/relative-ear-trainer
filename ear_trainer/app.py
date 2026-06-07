@@ -42,6 +42,12 @@ RANDOM_LABEL = "Random"
 INTERVAL_MODES = ("Ascending", "Descending", "Harmonic", RANDOM_LABEL)
 DURATION_LABELS = ("Short", "Medium", "Long")
 DEFAULT_DURATION_LABEL = "Medium"
+HARMONY_INVERSION_OPTIONS = (
+    ("Root", 0),
+    ("1st", 1),
+    ("2nd", 2),
+    ("3rd", 3),
+)
 DURATION_PROFILES = {
     "Short": {
         "melodic_note": 440,
@@ -101,6 +107,7 @@ class EarTrainerApp(tk.Tk):
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True)
+        self.notebook = notebook
         interval_tab = IntervalTrainerTab(
             notebook,
             self.player,
@@ -127,6 +134,24 @@ class EarTrainerApp(tk.Tk):
         notebook.add(interval_tab, text="Intervals")
         notebook.add(harmony_tab, text="Harmonies")
         notebook.add(progression_tab, text="Harmonic Functions")
+        self.tab_keys = {
+            str(interval_tab): "intervals",
+            str(harmony_tab): "harmonies",
+            str(progression_tab): "progressions",
+        }
+
+        active_tab_key = self.settings.option(
+            "ui",
+            "active_tab",
+            list(self.tab_keys.values()),
+            "intervals",
+        )
+        active_tab = next(
+            (tab for tab in self.trainer_tabs if self.tab_keys[str(tab)] == active_tab_key),
+            interval_tab,
+        )
+        notebook.select(active_tab)
+        notebook.bind("<<NotebookTabChanged>>", self._save_active_tab)
 
     def _configure_style(self) -> None:
         style = ttk.Style(self)
@@ -137,6 +162,12 @@ class EarTrainerApp(tk.Tk):
         for tab in self.trainer_tabs:
             if tab is not active_tab and tab.running:
                 tab.stop_training()
+
+    def _save_active_tab(self, _event: tk.Event[ttk.Notebook]) -> None:
+        active_tab = self.notebook.select()
+        active_tab_key = self.tab_keys.get(active_tab)
+        if active_tab_key is not None:
+            self.settings.save_section("ui", {"active_tab": active_tab_key})
 
 
 class BaseTrainerTab(ttk.Frame):
@@ -160,11 +191,25 @@ class BaseTrainerTab(ttk.Frame):
         self.current: Challenge | None = None
         self.correct_count = 0
         self.total_count = 0
-        self._selection_save_after_id: str | None = None
+        self._settings_save_after_id: str | None = None
         self.on_start = on_start
 
-        self.timbre_var = tk.StringVar(value=RANDOM_LABEL)
-        self.duration_var = tk.StringVar(value=DEFAULT_DURATION_LABEL)
+        self.timbre_var = tk.StringVar(
+            value=self.settings.option(
+                self.settings_key,
+                "instrument",
+                [*TIMBRES.keys(), RANDOM_LABEL],
+                RANDOM_LABEL,
+            )
+        )
+        self.duration_var = tk.StringVar(
+            value=self.settings.option(
+                self.settings_key,
+                "duration",
+                list(DURATION_LABELS),
+                DEFAULT_DURATION_LABEL,
+            )
+        )
         self.status_var = tk.StringVar(value=f"MIDI: {self.player.describe_backend()}")
         self.feedback_var = tk.StringVar(value="")
         self.score_var = tk.StringVar(value="Correct: 0/0")
@@ -178,6 +223,10 @@ class BaseTrainerTab(ttk.Frame):
             self.selection_vars[definition.name] = tk.BooleanVar(value=selected)
         self.answer_buttons: dict[str, ttk.Button] = {}
         self.selection_controls: list[tk.Widget] = []
+        self.definition_checkbuttons: list[ttk.Checkbutton] = []
+        self.definition_grid_parent: ttk.Frame | None = None
+        self.definition_canvas: tk.Canvas | None = None
+        self._definition_grid_columns = 0
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
@@ -239,19 +288,28 @@ class BaseTrainerTab(ttk.Frame):
         none_button.pack(side=tk.LEFT, padx=(6, 0))
         self.selection_controls.extend([all_button, none_button])
 
-        definition_columns = self._definition_columns()
-        definition_rows = max(1, (len(self.definitions) + definition_columns - 1) // definition_columns)
-        selector_height = min(definition_rows, 6) * 30 + 2
-        grid_parent = self._scrollable_frame(outer, height=selector_height, expand=False)
-        for index, definition in enumerate(self.definitions):
-            row, column = divmod(index, definition_columns)
+        definition_columns = self._definition_columns_for_width(0)
+        selector_height = self._selector_height(definition_columns)
+        grid_parent, canvas = self._scrollable_frame(
+            outer,
+            height=selector_height,
+            expand=False,
+        )
+        self.definition_grid_parent = grid_parent
+        self.definition_canvas = canvas
+        for definition in self.definitions:
             checkbutton = ttk.Checkbutton(
                 grid_parent,
-                text=definition.name,
+                text=self._definition_selection_label(definition),
                 variable=self.selection_vars[definition.name],
             )
-            checkbutton.grid(row=row, column=column, sticky="w", padx=8, pady=3)
+            self.definition_checkbuttons.append(checkbutton)
             self.selection_controls.append(checkbutton)
+        self._layout_definition_selector(definition_columns)
+        canvas.bind("<Configure>", self._reflow_definition_selector, add="+")
+
+    def _definition_selection_label(self, definition: MusicDefinition) -> str:
+        return definition.name
 
     def _build_answer_area(self) -> None:
         outer = ttk.LabelFrame(self, text="Answer", padding=8)
@@ -272,12 +330,68 @@ class BaseTrainerTab(ttk.Frame):
 
     def _definition_columns(self, definitions: list[MusicDefinition] | None = None) -> int:
         definitions = definitions or list(self.definitions)
-        max_name_length = max((len(definition.name) for definition in definitions), default=0)
+        max_name_length = max(
+            (len(self._definition_selection_label(definition)) for definition in definitions),
+            default=0,
+        )
         if max_name_length > 18:
             return 2
         if len(definitions) > 24:
             return 8
         return 6
+
+    def _definition_columns_for_width(self, width: int) -> int:
+        if not self.definitions:
+            return 1
+
+        max_columns = min(len(self.definitions), 8)
+        if width <= 1:
+            return min(max_columns, 6)
+
+        column_width = self._definition_column_width()
+        available_width = max(width - 20, column_width)
+        return max(1, min(max_columns, available_width // column_width))
+
+    def _definition_column_width(self) -> int:
+        max_name_length = max(
+            (len(self._definition_selection_label(definition)) for definition in self.definitions),
+            default=0,
+        )
+        return max(96, min(280, (max_name_length * 8) + 44))
+
+    def _selector_height(self, definition_columns: int) -> int:
+        definition_rows = max(
+            1,
+            (len(self.definitions) + definition_columns - 1) // definition_columns,
+        )
+        return min(definition_rows, 6) * 30 + 2
+
+    def _layout_definition_selector(self, definition_columns: int) -> None:
+        if self.definition_grid_parent is None:
+            return
+
+        columns_to_reset = max(8, self._definition_grid_columns, definition_columns)
+        for column in range(columns_to_reset):
+            self.definition_grid_parent.columnconfigure(column, weight=0, minsize=0)
+
+        for checkbutton in self.definition_checkbuttons:
+            checkbutton.grid_forget()
+
+        for index, checkbutton in enumerate(self.definition_checkbuttons):
+            row, column = divmod(index, definition_columns)
+            checkbutton.grid(row=row, column=column, sticky="w", padx=8, pady=3)
+            self.definition_grid_parent.columnconfigure(column, weight=1)
+
+        self._definition_grid_columns = definition_columns
+        if self.definition_canvas is not None:
+            selector_height = self._selector_height(definition_columns)
+            if int(self.definition_canvas.cget("height")) != selector_height:
+                self.definition_canvas.configure(height=selector_height)
+
+    def _reflow_definition_selector(self, event: tk.Event[tk.Canvas]) -> None:
+        definition_columns = self._definition_columns_for_width(event.width)
+        if definition_columns != self._definition_grid_columns:
+            self._layout_definition_selector(definition_columns)
 
     def _build_controls(self) -> None:
         footer = ttk.Frame(self)
@@ -312,7 +426,12 @@ class BaseTrainerTab(ttk.Frame):
             pady=(6, 0),
         )
 
-    def _scrollable_frame(self, parent: tk.Widget, height: int, expand: bool = True) -> ttk.Frame:
+    def _scrollable_frame(
+        self,
+        parent: tk.Widget,
+        height: int,
+        expand: bool = True,
+    ) -> tuple[ttk.Frame, tk.Canvas]:
         container = ttk.Frame(parent)
         _columns, next_row = parent.grid_size()
         container.grid(row=next_row, column=0, sticky="nsew" if expand else "ew")
@@ -337,7 +456,7 @@ class BaseTrainerTab(ttk.Frame):
 
         inner.bind("<Configure>", update_scroll_region)
         canvas.bind("<Configure>", update_inner_width)
-        return inner
+        return inner, canvas
 
     def _set_all_selections(self, selected: bool) -> None:
         for variable in self.selection_vars.values():
@@ -345,25 +464,36 @@ class BaseTrainerTab(ttk.Frame):
 
     def _bind_selection_persistence(self) -> None:
         for variable in self.selection_vars.values():
-            variable.trace_add("write", lambda *_args: self._queue_selection_save())
+            variable.trace_add("write", lambda *_args: self._queue_settings_save())
+        for variable in (self.timbre_var, self.duration_var):
+            variable.trace_add("write", lambda *_args: self._queue_settings_save())
 
-    def _queue_selection_save(self) -> None:
+    def _queue_settings_save(self) -> None:
         self._sync_answer_buttons_with_selection()
-        if self._selection_save_after_id is not None:
-            self.after_cancel(self._selection_save_after_id)
-        self._selection_save_after_id = self.after(250, self._save_selection)
+        if self._settings_save_after_id is not None:
+            self.after_cancel(self._settings_save_after_id)
+        self._settings_save_after_id = self.after(250, self._save_settings)
 
-    def _save_selection(self) -> None:
-        self._selection_save_after_id = None
+    def _save_settings(self) -> None:
+        self._settings_save_after_id = None
         selected_names = [
             definition.name
             for definition in self.definitions
             if self.selection_vars[definition.name].get()
         ]
+        payload = {
+            "selected": selected_names,
+            "instrument": self.timbre_var.get(),
+            "duration": self.duration_var.get(),
+        }
+        payload.update(self._extra_settings_payload())
         try:
-            self.settings.save_selected_names(self.settings_key, selected_names)
+            self.settings.save_section(self.settings_key, payload)
         except OSError as exc:
-            self.status_var.set(f"Could not save selection: {exc}")
+            self.status_var.set(f"Could not save settings: {exc}")
+
+    def _extra_settings_payload(self) -> dict[str, str | list[str]]:
+        return {}
 
     def _active_definitions(self) -> list[MusicDefinition]:
         return [
@@ -406,7 +536,7 @@ class BaseTrainerTab(ttk.Frame):
 
         if self.on_start is not None:
             self.on_start(self)
-        self._save_selection()
+        self._save_settings()
         self.running = True
         self.correct_count = 0
         self.total_count = 0
@@ -510,7 +640,15 @@ class IntervalTrainerTab(BaseTrainerTab):
         definitions: tuple[MusicDefinition, ...],
         on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
-        self.interval_mode_var = tk.StringVar(master=parent, value=RANDOM_LABEL)
+        self.interval_mode_var = tk.StringVar(
+            master=parent,
+            value=settings.option(
+                "intervals",
+                "mode",
+                list(INTERVAL_MODES),
+                RANDOM_LABEL,
+            ),
+        )
         super().__init__(
             parent,
             player,
@@ -564,6 +702,16 @@ class IntervalTrainerTab(BaseTrainerTab):
                 variable=self.duration_var,
             ).grid(row=0, column=column, padx=4)
 
+    def _bind_selection_persistence(self) -> None:
+        super()._bind_selection_persistence()
+        self.interval_mode_var.trace_add(
+            "write",
+            lambda *_args: self._queue_settings_save(),
+        )
+
+    def _extra_settings_payload(self) -> dict[str, str | list[str]]:
+        return {"mode": self.interval_mode_var.get()}
+
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         interval = definition.semitones[0]
         mode = self.interval_mode_var.get()
@@ -611,6 +759,30 @@ class HarmonyTrainerTab(BaseTrainerTab):
         definitions: tuple[MusicDefinition, ...],
         on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
+        self.harmony_mode_var = tk.StringVar(
+            master=parent,
+            value=settings.option(
+                "harmonies",
+                "mode",
+                list(INTERVAL_MODES),
+                "Harmonic",
+            ),
+        )
+        inversion_labels = [label for label, _degree in HARMONY_INVERSION_OPTIONS]
+        selected_inversions = settings.selected_values(
+            "harmonies",
+            "inversions",
+            inversion_labels,
+        )
+        self.inversion_vars = {
+            label: tk.BooleanVar(
+                master=parent,
+                value=label in selected_inversions
+                if selected_inversions is not None
+                else degree == 0,
+            )
+            for label, degree in HARMONY_INVERSION_OPTIONS
+        }
         super().__init__(
             parent,
             player,
@@ -621,20 +793,227 @@ class HarmonyTrainerTab(BaseTrainerTab):
             on_start=on_start,
         )
 
+    def _build_header(self) -> None:
+        header = ttk.Frame(self)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        header.columnconfigure(1, weight=1)
+
+        ttk.Label(header, text=self.title, style="Header.TLabel").grid(
+            row=0,
+            column=0,
+            rowspan=4,
+            sticky="w",
+        )
+        timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
+        timbre_frame.grid(row=0, column=1, sticky="e")
+        for index, label in enumerate((*TIMBRES.keys(), RANDOM_LABEL)):
+            row, column = divmod(index, TIMBRE_COLUMNS)
+            ttk.Radiobutton(
+                timbre_frame,
+                text=label,
+                value=label,
+                variable=self.timbre_var,
+            ).grid(row=row, column=column, padx=4, sticky="w")
+
+        mode_frame = ttk.LabelFrame(header, text="Mode", padding=8)
+        mode_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
+        for column, label in enumerate(INTERVAL_MODES):
+            ttk.Radiobutton(
+                mode_frame,
+                text=label,
+                value=label,
+                variable=self.harmony_mode_var,
+            ).grid(row=0, column=column, padx=4)
+
+        inversion_frame = ttk.LabelFrame(header, text="Inversions", padding=8)
+        inversion_frame.grid(row=2, column=1, sticky="e", pady=(6, 0))
+        for column, (label, _degree) in enumerate(HARMONY_INVERSION_OPTIONS):
+            checkbutton = ttk.Checkbutton(
+                inversion_frame,
+                text=label,
+                variable=self.inversion_vars[label],
+            )
+            checkbutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(checkbutton)
+
+        duration_frame = ttk.LabelFrame(header, text="Duration", padding=8)
+        duration_frame.grid(row=3, column=1, sticky="e", pady=(6, 0))
+        for column, label in enumerate(DURATION_LABELS):
+            ttk.Radiobutton(
+                duration_frame,
+                text=label,
+                value=label,
+                variable=self.duration_var,
+            ).grid(row=0, column=column, padx=4)
+
+    def _definition_selection_label(self, definition: MusicDefinition) -> str:
+        return f"{definition.name} ({', '.join(definition.formula)})"
+
+    def _build_answer_area(self) -> None:
+        outer = ttk.LabelFrame(self, text="Answer", padding=8)
+        outer.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+
+        grid_parent = ttk.Frame(outer)
+        grid_parent.grid(row=0, column=0, sticky="new")
+        self.answer_grid_parent = grid_parent
+        for definition in self.definitions:
+            for inversion in range(min(3, len(definition.semitones) - 1) + 1):
+                answer_name = self._answer_name(definition, inversion)
+                button = ttk.Button(
+                    grid_parent,
+                    text=answer_name,
+                    command=lambda name=answer_name: self._answer(name),
+                )
+                self.answer_buttons[answer_name] = button
+
+    def _bind_selection_persistence(self) -> None:
+        super()._bind_selection_persistence()
+        self.harmony_mode_var.trace_add(
+            "write",
+            lambda *_args: self._queue_settings_save(),
+        )
+        for variable in self.inversion_vars.values():
+            variable.trace_add(
+                "write",
+                lambda *_args: self._queue_settings_save(),
+            )
+
+    def _extra_settings_payload(self) -> dict[str, str | list[str]]:
+        selected_inversions = [
+            label
+            for label, _degree in HARMONY_INVERSION_OPTIONS
+            if self.inversion_vars[label].get()
+        ]
+        return {
+            "mode": self.harmony_mode_var.get(),
+            "inversions": selected_inversions,
+        }
+
+    def _sync_answer_buttons_with_selection(self) -> None:
+        active_answers = self._active_answer_names()
+        active_answer_set = set(active_answers)
+        answer_columns = self._answer_columns(active_answers)
+
+        for column in range(max(8, answer_columns)):
+            self.answer_grid_parent.columnconfigure(column, weight=0, minsize=0)
+
+        for button in self.answer_buttons.values():
+            button.grid_remove()
+
+        for index, answer_name in enumerate(active_answers):
+            row, column = divmod(index, answer_columns)
+            button = self.answer_buttons[answer_name]
+            button.grid(row=row, column=column, sticky="ew", padx=5, pady=4)
+            self.answer_grid_parent.columnconfigure(column, weight=1, minsize=125)
+
+        if self.running and self.current is not None and self.current.answer not in active_answer_set:
+            self._set_answer_buttons_enabled(False)
+            self.status_var.set("Current answer was removed from selection")
+
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         timing = self._duration_profile()
         pitch_class = random.randrange(12)
         root = 48 + pitch_class
-        notes = [
+        inversion = random.choice(self._active_inversions(len(definition.semitones)))
+        semitones = self._apply_inversion(definition.semitones, inversion)
+        notes = self._build_harmony_notes(root=root, semitones=semitones, timing=timing)
+        return Challenge(
+            answer=self._answer_name(definition, inversion),
+            program=self._choose_program(),
+            notes=notes,
+        )
+
+    def _build_harmony_notes(
+        self,
+        root: int,
+        semitones: tuple[int, ...],
+        timing: dict[str, int],
+    ) -> list[MidiNote]:
+        mode = self.harmony_mode_var.get()
+        if mode == RANDOM_LABEL:
+            mode = random.choice(("Ascending", "Descending", "Harmonic"))
+
+        ordered_semitones = (
+            tuple(reversed(semitones)) if mode == "Descending" else semitones
+        )
+        if mode == "Harmonic":
+            return [
+                MidiNote(
+                    start=0,
+                    duration=timing["harmony_chord"],
+                    pitch=root + semitone,
+                    velocity=84,
+                )
+                for semitone in ordered_semitones
+            ]
+
+        return [
             MidiNote(
-                start=0,
-                duration=timing["harmony_chord"],
+                start=index * timing["melodic_step"],
+                duration=timing["melodic_note"],
                 pitch=root + semitone,
                 velocity=84,
             )
-            for semitone in definition.semitones
+            for index, semitone in enumerate(ordered_semitones)
         ]
-        return Challenge(answer=definition.name, program=self._choose_program(), notes=notes)
+
+    def _apply_inversion(self, semitones: tuple[int, ...], inversion: int) -> tuple[int, ...]:
+        if inversion == 0:
+            return semitones
+
+        return tuple(
+            sorted(
+                semitone + 12 if index < inversion else semitone
+                for index, semitone in enumerate(semitones)
+            )
+        )
+
+    def _active_definitions(self) -> list[MusicDefinition]:
+        return [
+            definition
+            for definition in super()._active_definitions()
+            if self._active_inversions(len(definition.semitones))
+        ]
+
+    def _active_inversions(self, note_count: int) -> list[int]:
+        max_inversion = max(0, note_count - 1)
+        return [
+            degree
+            for label, degree in HARMONY_INVERSION_OPTIONS
+            if degree <= max_inversion and self.inversion_vars[label].get()
+        ]
+
+    def _active_answer_names(self) -> list[str]:
+        names: list[str] = []
+        active_definitions = self._active_definitions()
+        max_note_count = max(
+            (len(definition.semitones) for definition in active_definitions),
+            default=0,
+        )
+        for inversion in self._active_inversions(max_note_count):
+            for definition in active_definitions:
+                if inversion <= len(definition.semitones) - 1:
+                    names.append(self._answer_name(definition, inversion))
+        return names
+
+    def _answer_name(self, definition: MusicDefinition, inversion: int) -> str:
+        formula = self._inverted_formula(definition.formula, inversion)
+        return f"{definition.name} ({', '.join(formula)})"
+
+    def _inverted_formula(self, formula: tuple[str, ...], inversion: int) -> tuple[str, ...]:
+        if inversion == 0:
+            return formula
+        return formula[inversion:] + formula[:inversion]
+
+    def _answer_columns(self, answer_names: list[str]) -> int:
+        max_name_length = max((len(name) for name in answer_names), default=0)
+        if max_name_length > 18:
+            return 2
+        if len(answer_names) > 24:
+            return 8
+        return 6
 
 
 class ProgressionTrainerTab(BaseTrainerTab):
