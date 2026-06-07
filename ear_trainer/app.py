@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 import random
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -95,27 +96,47 @@ class EarTrainerApp(tk.Tk):
 
         self.player = MidiPlayer()
         self.settings = SettingsStore()
+        self.trainer_tabs: list[BaseTrainerTab] = []
         self._configure_style()
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True)
-        notebook.add(
-            IntervalTrainerTab(notebook, self.player, self.settings, interval_definitions),
-            text="Intervals",
+        interval_tab = IntervalTrainerTab(
+            notebook,
+            self.player,
+            self.settings,
+            interval_definitions,
+            self._stop_other_tabs,
         )
-        notebook.add(
-            HarmonyTrainerTab(notebook, self.player, self.settings, harmony_definitions),
-            text="Harmonies",
+        harmony_tab = HarmonyTrainerTab(
+            notebook,
+            self.player,
+            self.settings,
+            harmony_definitions,
+            self._stop_other_tabs,
         )
-        notebook.add(
-            ProgressionTrainerTab(notebook, self.player, self.settings, progression_definitions),
-            text="Harmonic Functions",
+        progression_tab = ProgressionTrainerTab(
+            notebook,
+            self.player,
+            self.settings,
+            progression_definitions,
+            self._stop_other_tabs,
         )
+        self.trainer_tabs = [interval_tab, harmony_tab, progression_tab]
+
+        notebook.add(interval_tab, text="Intervals")
+        notebook.add(harmony_tab, text="Harmonies")
+        notebook.add(progression_tab, text="Harmonic Functions")
 
     def _configure_style(self) -> None:
         style = ttk.Style(self)
         style.configure("Header.TLabel", font=("", 12, "bold"))
         style.configure("Result.TLabel", font=("", 12, "bold"))
+
+    def _stop_other_tabs(self, active_tab: BaseTrainerTab) -> None:
+        for tab in self.trainer_tabs:
+            if tab is not active_tab and tab.running:
+                tab.stop_training()
 
 
 class BaseTrainerTab(ttk.Frame):
@@ -127,6 +148,7 @@ class BaseTrainerTab(ttk.Frame):
         settings_key: str,
         definitions: tuple[MusicDefinition, ...],
         title: str,
+        on_start: Callable[[BaseTrainerTab], None] | None = None,
     ) -> None:
         super().__init__(parent, padding=12)
         self.player = player
@@ -139,6 +161,7 @@ class BaseTrainerTab(ttk.Frame):
         self.correct_count = 0
         self.total_count = 0
         self._selection_save_after_id: str | None = None
+        self.on_start = on_start
 
         self.timbre_var = tk.StringVar(value=RANDOM_LABEL)
         self.duration_var = tk.StringVar(value=DEFAULT_DURATION_LABEL)
@@ -154,6 +177,7 @@ class BaseTrainerTab(ttk.Frame):
             selected = True if selected_names is None else definition.name in selected_names
             self.selection_vars[definition.name] = tk.BooleanVar(value=selected)
         self.answer_buttons: dict[str, ttk.Button] = {}
+        self.selection_controls: list[tk.Widget] = []
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
@@ -205,12 +229,15 @@ class BaseTrainerTab(ttk.Frame):
 
         buttons = ttk.Frame(outer)
         buttons.grid(row=0, column=0, sticky="ew", pady=(0, 2))
-        ttk.Button(buttons, text="All", command=lambda: self._set_all_selections(True)).pack(
-            side=tk.LEFT
+        all_button = ttk.Button(buttons, text="All", command=lambda: self._set_all_selections(True))
+        all_button.pack(side=tk.LEFT)
+        none_button = ttk.Button(
+            buttons,
+            text="None",
+            command=lambda: self._set_all_selections(False),
         )
-        ttk.Button(buttons, text="None", command=lambda: self._set_all_selections(False)).pack(
-            side=tk.LEFT, padx=(6, 0)
-        )
+        none_button.pack(side=tk.LEFT, padx=(6, 0))
+        self.selection_controls.extend([all_button, none_button])
 
         definition_columns = self._definition_columns()
         definition_rows = max(1, (len(self.definitions) + definition_columns - 1) // definition_columns)
@@ -218,11 +245,13 @@ class BaseTrainerTab(ttk.Frame):
         grid_parent = self._scrollable_frame(outer, height=selector_height, expand=False)
         for index, definition in enumerate(self.definitions):
             row, column = divmod(index, definition_columns)
-            ttk.Checkbutton(
+            checkbutton = ttk.Checkbutton(
                 grid_parent,
                 text=definition.name,
                 variable=self.selection_vars[definition.name],
-            ).grid(row=row, column=column, sticky="w", padx=8, pady=3)
+            )
+            checkbutton.grid(row=row, column=column, sticky="w", padx=8, pady=3)
+            self.selection_controls.append(checkbutton)
 
     def _build_answer_area(self) -> None:
         outer = ttk.LabelFrame(self, text="Answer", padding=8)
@@ -366,7 +395,7 @@ class BaseTrainerTab(ttk.Frame):
 
     def _toggle_running(self) -> None:
         if self.running:
-            self._stop()
+            self.stop_training()
         else:
             self._start()
 
@@ -375,6 +404,8 @@ class BaseTrainerTab(ttk.Frame):
             self.status_var.set("Select at least one option")
             return
 
+        if self.on_start is not None:
+            self.on_start(self)
         self._save_selection()
         self.running = True
         self.correct_count = 0
@@ -384,15 +415,17 @@ class BaseTrainerTab(ttk.Frame):
         self.start_button.configure(text="Stop")
         self.replay_button.configure(state=tk.NORMAL)
         self.next_button.configure(state=tk.DISABLED)
+        self._set_selection_controls_enabled(False)
         self._next_challenge()
 
-    def _stop(self) -> None:
+    def stop_training(self) -> None:
         self.running = False
         self.current = None
         self.start_button.configure(text="Start")
         self.replay_button.configure(state=tk.DISABLED)
         self.next_button.configure(state=tk.DISABLED)
         self._set_answer_buttons_enabled(False)
+        self._set_selection_controls_enabled(True)
         self.status_var.set("Stopped")
 
     def _next_challenge(self) -> None:
@@ -401,7 +434,7 @@ class BaseTrainerTab(ttk.Frame):
 
         active_definitions = self._active_definitions()
         if not active_definitions:
-            self._stop()
+            self.stop_training()
             self.status_var.set("Select at least one option")
             return
 
@@ -462,6 +495,11 @@ class BaseTrainerTab(ttk.Frame):
         for button in self.answer_buttons.values():
             button.configure(state=state)
 
+    def _set_selection_controls_enabled(self, enabled: bool) -> None:
+        state = tk.NORMAL if enabled else tk.DISABLED
+        for control in self.selection_controls:
+            control.configure(state=state)
+
 
 class IntervalTrainerTab(BaseTrainerTab):
     def __init__(
@@ -470,6 +508,7 @@ class IntervalTrainerTab(BaseTrainerTab):
         player: MidiPlayer,
         settings: SettingsStore,
         definitions: tuple[MusicDefinition, ...],
+        on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
         self.interval_mode_var = tk.StringVar(master=parent, value=RANDOM_LABEL)
         super().__init__(
@@ -479,6 +518,7 @@ class IntervalTrainerTab(BaseTrainerTab):
             "intervals",
             definitions,
             title="Interval training",
+            on_start=on_start,
         )
 
     def _build_header(self) -> None:
@@ -569,6 +609,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         player: MidiPlayer,
         settings: SettingsStore,
         definitions: tuple[MusicDefinition, ...],
+        on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
         super().__init__(
             parent,
@@ -577,6 +618,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
             "harmonies",
             definitions,
             title="Harmony training",
+            on_start=on_start,
         )
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
@@ -602,6 +644,7 @@ class ProgressionTrainerTab(BaseTrainerTab):
         player: MidiPlayer,
         settings: SettingsStore,
         definitions: tuple[ProgressionDefinition, ...],
+        on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
         super().__init__(
             parent,
@@ -610,6 +653,7 @@ class ProgressionTrainerTab(BaseTrainerTab):
             "progressions",
             definitions,
             title="Harmonic function training",
+            on_start=on_start,
         )
 
     def _build_challenge(self, definition: ProgressionDefinition) -> Challenge:
