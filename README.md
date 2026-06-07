@@ -1,33 +1,35 @@
 # Relative Ear Trainer
 
-Aplicacion de escritorio simple para entrenar oido relativo con Python, Tk y MIDI General MIDI.
+A simple desktop app for relative ear training, built with Python, Tk, and General MIDI.
 
-## Ejecutar
+## Run
 
 ```bash
 ./run_app.sh
 ```
 
-Requisitos habituales en Linux:
+Typical Linux requirements:
 
 ```bash
 sudo apt install python3-tk fluidsynth fluid-soundfont-gm
 ```
 
-`PyYAML` es opcional para estos ficheros simples. Si quieres sintaxis YAML completa:
+`PyYAML` is optional for the bundled simple config files. Install it if you want
+full YAML syntax support:
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-## Configuracion
+## Configuration
 
-Los ejercicios salen de dos ficheros:
+Exercises are loaded from two files:
 
 - `config/intervals.yaml`
 - `config/harmonies.yaml`
 
-Puedes anadir entradas sin cambiar codigo. Las formulas usan grados relativos:
+You can add entries without changing the Python code. Formulas use relative
+scale degrees:
 
 ```yaml
 harmonies:
@@ -36,20 +38,21 @@ harmonies:
   m7b5: "1, b3, b5, b7"
 ```
 
-Accidentales soportados: `b`, `#`, incluso dobles como `bb7`. Extensiones como `b9`,
-`9`, `#11`, `b13` y `13` se calculan en la octava correspondiente.
+Supported accidentals: `b`, `#`, including double accidentals such as `bb7`.
+Extensions such as `b9`, `9`, `#11`, `b13`, and `13` are calculated in the
+corresponding octave.
 
 ## MIDI
 
-La app genera ficheros MIDI temporales y los reproduce con el primer backend disponible:
+The app generates temporary MIDI files and plays them with the first available
+backend:
 
-1. `fluidsynth` con un soundfont GM.
+1. `fluidsynth` with a GM soundfont.
 2. `timidity`.
-3. `aplaymidi`, solo si defines `EAR_TRAINER_MIDI_PORT`.
+3. `aplaymidi`, only if `EAR_TRAINER_MIDI_PORT` is set.
 
-Puedes forzar un soundfont concreto:
+You can force a specific soundfont:
 
 ```bash
-EAR_TRAINER_SOUNDFONT=/ruta/a/soundfont.sf2 ./run_app.sh
+EAR_TRAINER_SOUNDFONT=/path/to/soundfont.sf2 ./run_app.sh
 ```
-
