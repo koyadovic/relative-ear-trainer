@@ -13,8 +13,8 @@ trainer, or configurable MIDI ear training tool.
 
 - Interval ear training with selectable ascending, descending, and harmonic
   modes.
-- Harmony training for triads, seventh chords, extensions, altered chords, and
-  inversions.
+- Harmony training for triads, seventh chords, extensions, altered chords,
+  inversions, and selectable playback modes.
 - Harmonic function training with configurable roman-numeral progressions.
 - YAML-based exercises for adding custom intervals, chords, and progressions.
 - Multi-select General MIDI instruments including piano, guitar, violin,
@@ -104,7 +104,7 @@ range.
 ## Saved Practice Sets
 
 The app remembers the last UI settings for each training tab: selected material,
-selected instruments, playback duration, interval modes, harmony mode, active
+selected instruments, playback duration, interval modes, harmony modes, active
 harmony inversions, and the active tab. This lets you start with a small group,
 consolidate it, and gradually add more material without rebuilding the same
 setup every time.

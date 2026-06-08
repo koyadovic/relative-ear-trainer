@@ -30,7 +30,6 @@ INSTRUMENTS_PATH = PROJECT_ROOT / "config" / "instruments.yaml"
 TIMBRE_COLUMNS = 6
 RANDOM_LABEL = "Random"
 INTERVAL_MODES = ("Ascending", "Descending", "Harmonic")
-HARMONY_MODES = (*INTERVAL_MODES, RANDOM_LABEL)
 DURATION_LABELS = ("Short", "Medium", "Long")
 DEFAULT_DURATION_LABEL = "Medium"
 HARMONY_INVERSION_OPTIONS = (
@@ -956,15 +955,25 @@ class HarmonyTrainerTab(BaseTrainerTab):
         definitions: tuple[MusicDefinition, ...],
         on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
-        self.harmony_mode_var = tk.StringVar(
-            master=parent,
-            value=settings.option(
+        selected_modes = settings.selected_values(
+            "harmonies",
+            "modes",
+            list(INTERVAL_MODES),
+        )
+        if selected_modes is None:
+            legacy_mode = settings.option(
                 "harmonies",
                 "mode",
-                list(HARMONY_MODES),
+                [*INTERVAL_MODES, RANDOM_LABEL],
                 "Harmonic",
-            ),
-        )
+            )
+            selected_modes = (
+                set(INTERVAL_MODES) if legacy_mode == RANDOM_LABEL else {legacy_mode}
+            )
+        self.harmony_mode_vars = {
+            mode: tk.BooleanVar(master=parent, value=mode in selected_modes)
+            for mode in INTERVAL_MODES
+        }
         inversion_labels = [label for label, _degree in HARMONY_INVERSION_OPTIONS]
         selected_inversions = settings.selected_values(
             "harmonies",
@@ -1008,13 +1017,14 @@ class HarmonyTrainerTab(BaseTrainerTab):
 
         mode_frame = ttk.LabelFrame(header, text="Mode", padding=8)
         mode_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
-        for column, label in enumerate(HARMONY_MODES):
-            ttk.Radiobutton(
+        for column, label in enumerate(INTERVAL_MODES):
+            checkbutton = ttk.Checkbutton(
                 mode_frame,
                 text=label,
-                value=label,
-                variable=self.harmony_mode_var,
-            ).grid(row=0, column=column, padx=4)
+                variable=self.harmony_mode_vars[label],
+            )
+            checkbutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(checkbutton)
 
         inversion_frame = ttk.LabelFrame(header, text="Inversions", padding=8)
         inversion_frame.grid(row=2, column=1, sticky="e", pady=(6, 0))
@@ -1061,10 +1071,8 @@ class HarmonyTrainerTab(BaseTrainerTab):
 
     def _bind_selection_persistence(self) -> None:
         super()._bind_selection_persistence()
-        self.harmony_mode_var.trace_add(
-            "write",
-            lambda *_args: self._queue_settings_save(),
-        )
+        for variable in self.harmony_mode_vars.values():
+            variable.trace_add("write", lambda *_args: self._queue_settings_save())
         for variable in self.inversion_vars.values():
             variable.trace_add(
                 "write",
@@ -1078,9 +1086,18 @@ class HarmonyTrainerTab(BaseTrainerTab):
             if self.inversion_vars[label].get()
         ]
         return {
-            "mode": self.harmony_mode_var.get(),
+            "modes": self._active_harmony_modes(),
             "inversions": selected_inversions,
         }
+
+    def _active_harmony_modes(self) -> list[str]:
+        return [mode for mode in INTERVAL_MODES if self.harmony_mode_vars[mode].get()]
+
+    def _start(self) -> None:
+        if not self._active_harmony_modes():
+            self.status_var.set("Select at least one mode")
+            return
+        super()._start()
 
     def _sync_answer_buttons_with_selection(self) -> None:
         active_answers = self._active_answer_names()
@@ -1129,10 +1146,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         )
 
     def _actual_harmony_mode(self) -> str:
-        mode = self.harmony_mode_var.get()
-        if mode == RANDOM_LABEL:
-            return random.choice(("Ascending", "Descending", "Harmonic"))
-        return mode
+        return random.choice(self._active_harmony_modes())
 
     def _build_harmony_answer_notes(
         self,
