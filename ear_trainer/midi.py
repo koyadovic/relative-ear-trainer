@@ -37,6 +37,8 @@ class MidiNote:
 class MidiPlayer:
     def __init__(self) -> None:
         self._backend = _detect_backend()
+        self._lock = threading.Lock()
+        self._active_playbacks: list[tuple[subprocess.Popen[bytes], Path]] = []
 
     def describe_backend(self) -> str:
         kind = self._backend.kind
@@ -57,6 +59,7 @@ class MidiPlayer:
                 "for example: sudo apt install fluidsynth fluid-soundfont-gm"
             )
 
+        self.stop()
         midi_bytes = build_midi(program=program, notes=notes)
         handle = tempfile.NamedTemporaryFile(prefix="ear-trainer-", suffix=".mid", delete=False)
         midi_path = Path(handle.name)
@@ -73,7 +76,35 @@ class MidiPlayer:
             midi_path.unlink(missing_ok=True)
             raise PlaybackError(str(exc)) from exc
 
-        threading.Thread(target=_cleanup_after_playback, args=(process, midi_path), daemon=True).start()
+        with self._lock:
+            self._active_playbacks.append((process, midi_path))
+        threading.Thread(
+            target=self._cleanup_after_playback,
+            args=(process, midi_path),
+            daemon=True,
+        ).start()
+
+    def stop(self) -> None:
+        with self._lock:
+            active_playbacks = self._active_playbacks
+            self._active_playbacks = []
+
+        for process, _midi_path in active_playbacks:
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+
+    def _cleanup_after_playback(self, process: subprocess.Popen[bytes], midi_path: Path) -> None:
+        process.wait()
+        with self._lock:
+            self._active_playbacks = [
+                active_playback
+                for active_playback in self._active_playbacks
+                if active_playback[0] is not process
+            ]
+        midi_path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -144,11 +175,6 @@ def _find_soundfont() -> Path | None:
         if path.exists():
             return path
     return None
-
-
-def _cleanup_after_playback(process: subprocess.Popen[bytes], midi_path: Path) -> None:
-    process.wait()
-    midi_path.unlink(missing_ok=True)
 
 
 def _varlen(value: int) -> bytes:

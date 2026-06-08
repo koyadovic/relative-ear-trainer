@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 import random
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -10,8 +10,10 @@ from tkinter import messagebox, ttk
 from .config_loader import ConfigError
 from .midi import MidiNote, MidiPlayer, PlaybackError
 from .music import (
+    InstrumentDefinition,
     MusicDefinition,
     ProgressionDefinition,
+    load_instrument_definitions,
     load_harmony_definitions,
     load_interval_definitions,
     load_progression_definitions,
@@ -23,19 +25,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INTERVALS_PATH = PROJECT_ROOT / "config" / "intervals.yaml"
 HARMONIES_PATH = PROJECT_ROOT / "config" / "harmonies.yaml"
 PROGRESSIONS_PATH = PROJECT_ROOT / "config" / "progressions.yaml"
+INSTRUMENTS_PATH = PROJECT_ROOT / "config" / "instruments.yaml"
 
-TIMBRES = {
-    "Piano": 0,
-    "Guitar": 24,
-    "Violin": 40,
-    "Vibraphone": 11,
-    "Marimba": 12,
-    "Flute": 73,
-    "Oboe": 68,
-    "Saxophone": 65,
-    "Trumpet": 56,
-    "Sitar": 104,
-}
 TIMBRE_COLUMNS = 6
 RANDOM_LABEL = "Random"
 INTERVAL_MODES = ("Ascending", "Descending", "Harmonic", RANDOM_LABEL)
@@ -80,6 +71,7 @@ class Challenge:
     answer: str
     program: int
     notes: list[MidiNote]
+    answer_notes: dict[str, list[MidiNote]]
 
 
 class EarTrainerApp(tk.Tk):
@@ -89,6 +81,7 @@ class EarTrainerApp(tk.Tk):
         self.minsize(860, 620)
 
         try:
+            instrument_definitions = load_instrument_definitions(INSTRUMENTS_PATH)
             interval_definitions = load_interval_definitions(INTERVALS_PATH)
             harmony_definitions = load_harmony_definitions(HARMONIES_PATH)
             progression_definitions = load_progression_definitions(
@@ -111,6 +104,7 @@ class EarTrainerApp(tk.Tk):
             notebook,
             self.player,
             self.settings,
+            instrument_definitions,
             interval_definitions,
             self._stop_other_tabs,
         )
@@ -118,6 +112,7 @@ class EarTrainerApp(tk.Tk):
             notebook,
             self.player,
             self.settings,
+            instrument_definitions,
             harmony_definitions,
             self._stop_other_tabs,
         )
@@ -125,6 +120,7 @@ class EarTrainerApp(tk.Tk):
             notebook,
             self.player,
             self.settings,
+            instrument_definitions,
             progression_definitions,
             self._stop_other_tabs,
         )
@@ -176,6 +172,7 @@ class BaseTrainerTab(ttk.Frame):
         player: MidiPlayer,
         settings: SettingsStore,
         settings_key: str,
+        instruments: tuple[InstrumentDefinition, ...],
         definitions: tuple[MusicDefinition, ...],
         title: str,
         on_start: Callable[[BaseTrainerTab], None] | None = None,
@@ -184,10 +181,15 @@ class BaseTrainerTab(ttk.Frame):
         self.player = player
         self.settings = settings
         self.settings_key = settings_key
+        self.instruments = instruments
+        self.instrument_names = [instrument.name for instrument in instruments]
+        self.instruments_by_name = {instrument.name: instrument for instrument in instruments}
         self.definitions = definitions
         self.title = title
         self.running = False
         self.current: Challenge | None = None
+        self.current_marked_answer: str | None = None
+        self.current_marked_correct: bool | None = None
         self.correct_count = 0
         self.total_count = 0
         self._settings_save_after_id: str | None = None
@@ -197,7 +199,7 @@ class BaseTrainerTab(ttk.Frame):
             value=self.settings.option(
                 self.settings_key,
                 "instrument",
-                [*TIMBRES.keys(), RANDOM_LABEL],
+                [*self.instrument_names, RANDOM_LABEL],
                 RANDOM_LABEL,
             )
         )
@@ -252,7 +254,7 @@ class BaseTrainerTab(ttk.Frame):
         )
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
-        for index, label in enumerate((*TIMBRES.keys(), RANDOM_LABEL)):
+        for index, label in enumerate((*self.instrument_names, RANDOM_LABEL)):
             row, column = divmod(index, TIMBRE_COLUMNS)
             ttk.Radiobutton(
                 timbre_frame,
@@ -396,7 +398,7 @@ class BaseTrainerTab(ttk.Frame):
     def _build_controls(self) -> None:
         footer = ttk.Frame(self)
         footer.grid(row=3, column=0, sticky="ew")
-        footer.columnconfigure(4, weight=1)
+        footer.columnconfigure(3, weight=1)
 
         self.start_button = ttk.Button(footer, text="Start", command=self._toggle_running)
         self.start_button.grid(row=0, column=0, padx=(0, 6))
@@ -413,17 +415,20 @@ class BaseTrainerTab(ttk.Frame):
             command=self._next_challenge,
             state=tk.DISABLED,
         )
-        self.next_button.grid(row=0, column=2, padx=(0, 10))
+        self.next_button.grid(row=0, column=2, padx=(0, 6))
         self.reset_stats_button = ttk.Button(
             footer,
             text="Reset Stats",
             command=self._reset_stats,
         )
-        self.reset_stats_button.grid(row=0, column=3, padx=(0, 10))
+        self.reset_stats_button.grid(row=0, column=5, padx=(10, 0), sticky="e")
         ttk.Label(footer, textvariable=self.status_var, style="Result.TLabel").grid(
-            row=0, column=4, sticky="w"
+            row=0,
+            column=3,
+            sticky="w",
+            padx=(4, 10),
         )
-        ttk.Label(footer, textvariable=self.score_var).grid(row=0, column=5, sticky="e")
+        ttk.Label(footer, textvariable=self.score_var).grid(row=0, column=4, sticky="e")
         ttk.Label(footer, textvariable=self.feedback_var, style="Result.TLabel").grid(
             row=1,
             column=0,
@@ -556,8 +561,11 @@ class BaseTrainerTab(ttk.Frame):
         self._next_challenge()
 
     def stop_training(self) -> None:
+        self.player.stop()
         self.running = False
         self.current = None
+        self.current_marked_answer = None
+        self.current_marked_correct = None
         self.start_button.configure(text="Start")
         self.replay_button.configure(state=tk.DISABLED)
         self.next_button.configure(state=tk.DISABLED)
@@ -566,6 +574,7 @@ class BaseTrainerTab(ttk.Frame):
         self.status_var.set("Stopped")
 
     def _next_challenge(self) -> None:
+        self.player.stop()
         if not self.running:
             return
 
@@ -577,6 +586,8 @@ class BaseTrainerTab(ttk.Frame):
 
         definition = random.choice(active_definitions)
         self.current = self._build_challenge(definition)
+        self.current_marked_answer = None
+        self.current_marked_correct = None
         self._set_answer_buttons_enabled(True)
         self.next_button.configure(state=tk.DISABLED)
         self.feedback_var.set("")
@@ -586,11 +597,36 @@ class BaseTrainerTab(ttk.Frame):
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         raise NotImplementedError
 
-    def _choose_program(self) -> int:
-        timbre_name = self.timbre_var.get()
-        if timbre_name == RANDOM_LABEL:
-            timbre_name = random.choice(tuple(TIMBRES))
-        return TIMBRES[timbre_name]
+    def _choose_instrument(self) -> InstrumentDefinition:
+        instrument_name = self.timbre_var.get()
+        if instrument_name == RANDOM_LABEL:
+            return random.choice(self.instruments)
+        return self.instruments_by_name.get(instrument_name, self.instruments[0])
+
+    def _choose_root_for_offsets(
+        self,
+        instrument: InstrumentDefinition,
+        offsets: Iterable[int],
+    ) -> int:
+        offset_values = tuple(offsets) or (0,)
+        low_note = instrument.low_note
+        high_note = instrument.high_note
+        min_offset = min(offset_values)
+        max_offset = max(offset_values)
+        min_root = max(0, low_note - min_offset)
+        max_root = min(127, high_note - max_offset)
+
+        if min_root <= max_root:
+            pitch_class = random.randrange(12)
+            candidates = [
+                root for root in range(min_root, max_root + 1) if root % 12 == pitch_class
+            ]
+            if candidates:
+                return random.choice(candidates)
+            return random.randint(min_root, max_root)
+
+        centered_root = (low_note + high_note - min_offset - max_offset) // 2
+        return max(0, min(127, centered_root))
 
     def _duration_profile(self) -> dict[str, int]:
         return DURATION_PROFILES.get(
@@ -614,25 +650,63 @@ class BaseTrainerTab(ttk.Frame):
             return
 
         correct = answer == self.current.answer
-        self.total_count += 1
         if correct:
-            self.correct_count += 1
             feedback = f"Correct: {self.current.answer}"
         else:
-            feedback = f"Wrong: it was {self.current.answer}"
+            feedback = f"Selected: {answer}; correct answer: {self.current.answer}"
 
-        stats_error = self._record_answer_stat(self.current.answer, correct)
+        stats_error = self._apply_answer_result(
+            self.current.answer,
+            self.current_marked_correct,
+            correct,
+        )
+        self.current_marked_answer = answer
+        self.current_marked_correct = correct
         self.feedback_var.set(feedback)
         self.status_var.set(stats_error or "Review the answer")
         self.score_var.set(f"Correct: {self.correct_count}/{self.total_count}")
-        self._set_answer_buttons_enabled(False)
         self.next_button.configure(state=tk.NORMAL)
+        self._play_answer(answer)
 
-    def _record_answer_stat(self, answer: str, correct: bool) -> str | None:
+    def _play_answer(self, answer: str) -> None:
+        if self.current is None:
+            return
+        notes = self.current.answer_notes.get(answer)
+        if not notes:
+            return
+        try:
+            self.player.play(program=self.current.program, notes=notes)
+        except PlaybackError as exc:
+            self.status_var.set(str(exc))
+
+    def _apply_answer_result(
+        self,
+        answer: str,
+        previous_correct: bool | None,
+        correct: bool,
+    ) -> str | None:
+        attempts_delta = 0
+        correct_delta = 0
+        if previous_correct is None:
+            self.total_count += 1
+            attempts_delta = 1
+            if correct:
+                self.correct_count += 1
+                correct_delta = 1
+        elif previous_correct != correct:
+            correct_delta = 1 if correct else -1
+            self.correct_count += correct_delta
+
+        if attempts_delta == 0 and correct_delta == 0:
+            return None
+
         answer_stats = self.answer_stats.setdefault(answer, {"correct": 0, "attempts": 0})
-        answer_stats["attempts"] += 1
-        if correct:
-            answer_stats["correct"] += 1
+        answer_stats["attempts"] += attempts_delta
+        answer_stats["correct"] += correct_delta
+        answer_stats["correct"] = max(
+            0,
+            min(answer_stats["correct"], answer_stats["attempts"]),
+        )
         error: str | None = None
         try:
             self.settings.save_stats(self.settings_key, self.answer_stats)
@@ -687,6 +761,7 @@ class IntervalTrainerTab(BaseTrainerTab):
         parent: tk.Widget,
         player: MidiPlayer,
         settings: SettingsStore,
+        instruments: tuple[InstrumentDefinition, ...],
         definitions: tuple[MusicDefinition, ...],
         on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
@@ -704,6 +779,7 @@ class IntervalTrainerTab(BaseTrainerTab):
             player,
             settings,
             "intervals",
+            instruments,
             definitions,
             title="Interval training",
             on_start=on_start,
@@ -723,7 +799,7 @@ class IntervalTrainerTab(BaseTrainerTab):
 
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
-        for index, label in enumerate((*TIMBRES.keys(), RANDOM_LABEL)):
+        for index, label in enumerate((*self.instrument_names, RANDOM_LABEL)):
             row, column = divmod(index, TIMBRE_COLUMNS)
             ttk.Radiobutton(
                 timbre_frame,
@@ -763,16 +839,48 @@ class IntervalTrainerTab(BaseTrainerTab):
         return {"mode": self.interval_mode_var.get()}
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
-        interval = definition.semitones[0]
         mode = self.interval_mode_var.get()
         if mode == RANDOM_LABEL:
             mode = random.choice(("Ascending", "Descending", "Harmonic"))
 
         timing = self._duration_profile()
-        pitch_class = random.randrange(12)
+        instrument = self._choose_instrument()
+        active_definitions = self._active_definitions()
+        offsets = [0]
+        if mode == "Descending":
+            offsets.extend(
+                -active_definition.semitones[0] for active_definition in active_definitions
+            )
+        else:
+            offsets.extend(
+                active_definition.semitones[0] for active_definition in active_definitions
+            )
+        root = self._choose_root_for_offsets(instrument, offsets)
+        answer_notes = {
+            active_definition.name: self._build_interval_notes(
+                interval=active_definition.semitones[0],
+                mode=mode,
+                root=root,
+                timing=timing,
+            )
+            for active_definition in active_definitions
+        }
+        return Challenge(
+            answer=definition.name,
+            program=instrument.program,
+            notes=answer_notes[definition.name],
+            answer_notes=answer_notes,
+        )
+
+    def _build_interval_notes(
+        self,
+        interval: int,
+        mode: str,
+        root: int,
+        timing: dict[str, int],
+    ) -> list[MidiNote]:
         if mode == "Ascending":
-            root = 48 + pitch_class
-            notes = [
+            return [
                 MidiNote(start=0, duration=timing["melodic_note"], pitch=root),
                 MidiNote(
                     start=timing["melodic_step"],
@@ -780,9 +888,8 @@ class IntervalTrainerTab(BaseTrainerTab):
                     pitch=root + interval,
                 ),
             ]
-        elif mode == "Descending":
-            root = 72 + pitch_class
-            notes = [
+        if mode == "Descending":
+            return [
                 MidiNote(start=0, duration=timing["melodic_note"], pitch=root),
                 MidiNote(
                     start=timing["melodic_step"],
@@ -790,14 +897,14 @@ class IntervalTrainerTab(BaseTrainerTab):
                     pitch=root - interval,
                 ),
             ]
-        else:
-            root = 60 + pitch_class
-            notes = [MidiNote(start=0, duration=timing["simultaneous_note"], pitch=root)]
-            target = root + interval
-            if target != root:
-                notes.append(MidiNote(start=0, duration=timing["simultaneous_note"], pitch=target))
 
-        return Challenge(answer=definition.name, program=self._choose_program(), notes=notes)
+        notes = [MidiNote(start=0, duration=timing["simultaneous_note"], pitch=root)]
+        target = root + interval
+        if target != root:
+            notes.append(
+                MidiNote(start=0, duration=timing["simultaneous_note"], pitch=target)
+            )
+        return notes
 
 
 class HarmonyTrainerTab(BaseTrainerTab):
@@ -806,6 +913,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         parent: tk.Widget,
         player: MidiPlayer,
         settings: SettingsStore,
+        instruments: tuple[InstrumentDefinition, ...],
         definitions: tuple[MusicDefinition, ...],
         on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
@@ -838,6 +946,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
             player,
             settings,
             "harmonies",
+            instruments,
             definitions,
             title="Harmony training",
             on_start=on_start,
@@ -856,7 +965,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         )
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
-        for index, label in enumerate((*TIMBRES.keys(), RANDOM_LABEL)):
+        for index, label in enumerate((*self.instrument_names, RANDOM_LABEL)):
             row, column = divmod(index, TIMBRE_COLUMNS)
             ttk.Radiobutton(
                 timbre_frame,
@@ -965,26 +1074,72 @@ class HarmonyTrainerTab(BaseTrainerTab):
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         timing = self._duration_profile()
-        pitch_class = random.randrange(12)
-        root = 48 + pitch_class
-        inversion = random.choice(self._active_inversions(len(definition.semitones)))
-        semitones = self._apply_inversion(definition.semitones, inversion)
-        notes = self._build_harmony_notes(root=root, semitones=semitones, timing=timing)
-        return Challenge(
-            answer=self._answer_name(definition, inversion),
-            program=self._choose_program(),
-            notes=notes,
+        instrument = self._choose_instrument()
+        active_definitions = self._active_definitions()
+        root = self._choose_root_for_offsets(
+            instrument,
+            self._harmony_answer_offsets(active_definitions),
         )
+        inversion = random.choice(self._active_inversions(len(definition.semitones)))
+        mode = self._actual_harmony_mode()
+        answer_notes = self._build_harmony_answer_notes(
+            root=root,
+            timing=timing,
+            mode=mode,
+            active_definitions=active_definitions,
+        )
+        answer = self._answer_name(definition, inversion)
+        return Challenge(
+            answer=answer,
+            program=instrument.program,
+            notes=answer_notes[answer],
+            answer_notes=answer_notes,
+        )
+
+    def _actual_harmony_mode(self) -> str:
+        mode = self.harmony_mode_var.get()
+        if mode == RANDOM_LABEL:
+            return random.choice(("Ascending", "Descending", "Harmonic"))
+        return mode
+
+    def _build_harmony_answer_notes(
+        self,
+        root: int,
+        timing: dict[str, int],
+        mode: str,
+        active_definitions: list[MusicDefinition] | None = None,
+    ) -> dict[str, list[MidiNote]]:
+        answer_notes: dict[str, list[MidiNote]] = {}
+        for definition in active_definitions or self._active_definitions():
+            for inversion in self._active_inversions(len(definition.semitones)):
+                answer_name = self._answer_name(definition, inversion)
+                semitones = self._apply_inversion(definition.semitones, inversion)
+                answer_notes[answer_name] = self._build_harmony_notes(
+                    root=root,
+                    semitones=semitones,
+                    timing=timing,
+                    mode=mode,
+                )
+        return answer_notes
+
+    def _harmony_answer_offsets(
+        self,
+        active_definitions: list[MusicDefinition],
+    ) -> list[int]:
+        offsets = [0]
+        for definition in active_definitions:
+            for inversion in self._active_inversions(len(definition.semitones)):
+                offsets.extend(self._apply_inversion(definition.semitones, inversion))
+        return offsets
 
     def _build_harmony_notes(
         self,
         root: int,
         semitones: tuple[int, ...],
         timing: dict[str, int],
+        mode: str | None = None,
     ) -> list[MidiNote]:
-        mode = self.harmony_mode_var.get()
-        if mode == RANDOM_LABEL:
-            mode = random.choice(("Ascending", "Descending", "Harmonic"))
+        mode = mode or self._actual_harmony_mode()
 
         ordered_semitones = (
             tuple(reversed(semitones)) if mode == "Descending" else semitones
@@ -1073,6 +1228,7 @@ class ProgressionTrainerTab(BaseTrainerTab):
         parent: tk.Widget,
         player: MidiPlayer,
         settings: SettingsStore,
+        instruments: tuple[InstrumentDefinition, ...],
         definitions: tuple[ProgressionDefinition, ...],
         on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
@@ -1081,6 +1237,7 @@ class ProgressionTrainerTab(BaseTrainerTab):
             player,
             settings,
             "progressions",
+            instruments,
             definitions,
             title="Harmonic function training",
             on_start=on_start,
@@ -1088,8 +1245,33 @@ class ProgressionTrainerTab(BaseTrainerTab):
 
     def _build_challenge(self, definition: ProgressionDefinition) -> Challenge:
         timing = self._duration_profile()
-        pitch_class = random.randrange(12)
-        tonic = 48 + pitch_class
+        instrument = self._choose_instrument()
+        active_definitions = self._active_definitions()
+        tonic = self._choose_root_for_offsets(
+            instrument,
+            self._progression_answer_offsets(active_definitions),
+        )
+        answer_notes = {
+            active_definition.name: self._build_progression_notes(
+                active_definition,
+                tonic=tonic,
+                timing=timing,
+            )
+            for active_definition in active_definitions
+        }
+        return Challenge(
+            answer=definition.name,
+            program=instrument.program,
+            notes=answer_notes[definition.name],
+            answer_notes=answer_notes,
+        )
+
+    def _build_progression_notes(
+        self,
+        definition: ProgressionDefinition,
+        tonic: int,
+        timing: dict[str, int],
+    ) -> list[MidiNote]:
         notes: list[MidiNote] = []
 
         for index, chord in enumerate(definition.chords):
@@ -1105,7 +1287,20 @@ class ProgressionTrainerTab(BaseTrainerTab):
                     )
                 )
 
-        return Challenge(answer=definition.name, program=self._choose_program(), notes=notes)
+        return notes
+
+    def _progression_answer_offsets(
+        self,
+        active_definitions: list[ProgressionDefinition],
+    ) -> list[int]:
+        offsets = [0]
+        for definition in active_definitions:
+            for chord in definition.chords:
+                offsets.extend(
+                    chord.degree_semitones + semitone
+                    for semitone in chord.harmony.semitones
+                )
+        return offsets
 
 
 def main() -> None:

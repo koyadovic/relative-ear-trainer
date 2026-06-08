@@ -1,0 +1,11 @@
+instruments:
+  Piano: [0, 21, 108]
+  Guitar: [24, 40, 88]
+  Violin: [40, 55, 103]
+  Vibraphone: [11, 53, 89]
+  Marimba: [12, 36, 96]
+  Flute: [73, 60, 108]
+  Oboe: [68, 58, 91]
+  Saxophone: [65, 49, 88]
+  Trumpet: [56, 52, 88]
+  Sitar: [104, 48, 96]

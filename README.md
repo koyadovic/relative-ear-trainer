@@ -18,6 +18,7 @@ trainer, or configurable MIDI ear training tool.
 - YAML-based exercises for adding custom intervals, chords, and progressions.
 - General MIDI instruments including piano, guitar, violin, vibraphone, marimba,
   flute, oboe, saxophone, trumpet, and sitar.
+- Configurable comfortable MIDI ranges per instrument.
 - Short, medium, and long playback durations.
 - Persistent practice settings per tab.
 - Persistent per-answer accuracy stats with a per-tab reset.
@@ -43,11 +44,12 @@ python3 -m pip install -r requirements.txt
 
 ## Configuration
 
-Exercises are loaded from three files:
+Exercises and instruments are loaded from four files:
 
 - `config/intervals.yaml`
 - `config/harmonies.yaml`
 - `config/progressions.yaml`
+- `config/instruments.yaml`
 
 You can add entries without changing the Python code. Formulas use relative
 scale degrees:
@@ -84,6 +86,19 @@ Harmony answers include the chord quality plus the active voicing formula. For
 example, a root-position major seventh appears as `Maj7 (1, 3, 5, 7)`, while
 its first inversion appears as `Maj7 (3, 5, 7, 1)`.
 
+Instruments use General MIDI program numbers plus a comfortable note range:
+
+```yaml
+instruments:
+  Piano: [0, 21, 108]
+  Guitar: [24, 40, 88]
+  Flute: [73, 60, 108]
+```
+
+The format is `[program, low_note, high_note]`. The app picks roots that keep
+the current interval, chord, inversion, or progression inside the selected
+instrument range.
+
 ## Saved Practice Sets
 
 The app remembers the last UI settings for each training tab: selected material,
@@ -115,7 +130,7 @@ backend:
 You can force a specific soundfont:
 
 ```bash
-EAR_TRAINER_SOUNDFONT=/path/to/soundfont.sf2 ./run_app.sh
+EAR_TRAINER_SOUNDFONT=/path/to/soundfont.sf2 ./app.sh
 ```
 
 Each training tab has a `Duration` selector with `Short`, `Medium`, and `Long`

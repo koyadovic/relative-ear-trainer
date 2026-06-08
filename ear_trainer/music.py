@@ -28,6 +28,14 @@ class MusicDefinition:
 
 
 @dataclass(frozen=True)
+class InstrumentDefinition:
+    name: str
+    program: int
+    low_note: int
+    high_note: int
+
+
+@dataclass(frozen=True)
 class ProgressionChord:
     token: str
     degree: str
@@ -40,6 +48,29 @@ class ProgressionDefinition:
     name: str
     mode: str
     chords: tuple[ProgressionChord, ...]
+
+
+def load_instrument_definitions(path: Path) -> tuple[InstrumentDefinition, ...]:
+    data = load_yaml_file(path)
+    section = data.get("instruments", data)
+    if not isinstance(section, dict):
+        raise ConfigError("Instrument definitions must be a mapping")
+
+    definitions: list[InstrumentDefinition] = []
+    for name, value in section.items():
+        program, low_note, high_note = _coerce_instrument_value(str(name), value)
+        definitions.append(
+            InstrumentDefinition(
+                name=str(name),
+                program=program,
+                low_note=low_note,
+                high_note=high_note,
+            )
+        )
+
+    if not definitions:
+        raise ConfigError(f"No instrument definitions found in {path}")
+    return tuple(definitions)
 
 
 def load_interval_definitions(path: Path) -> tuple[MusicDefinition, ...]:
@@ -117,6 +148,42 @@ def load_progression_definitions(
     if not definitions:
         raise ConfigError(f"No progression definitions found in {path}")
     return tuple(definitions)
+
+
+def _coerce_instrument_value(name: str, value: Any) -> tuple[int, int, int]:
+    if isinstance(value, dict):
+        program = value.get("program")
+        note_range = value.get("range", value.get("comfortable_range"))
+        if not isinstance(note_range, (list, tuple)) or len(note_range) != 2:
+            raise ConfigError(
+                f"Instrument {name!r} must define range as [low_note, high_note]"
+            )
+        values = (program, note_range[0], note_range[1])
+    elif isinstance(value, (list, tuple)):
+        if len(value) != 3:
+            raise ConfigError(
+                f"Instrument {name!r} must use [program, low_note, high_note]"
+            )
+        values = value
+    else:
+        values = _coerce_formula_tokens(value, default=None)
+        if len(values) != 3:
+            raise ConfigError(
+                f"Instrument {name!r} must use [program, low_note, high_note]"
+            )
+
+    try:
+        program, low_note, high_note = (int(item) for item in values)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"Instrument {name!r} must use numeric MIDI values") from exc
+
+    if not 0 <= program <= 127:
+        raise ConfigError(f"Instrument {name!r} program must be between 0 and 127")
+    if not 0 <= low_note <= high_note <= 127:
+        raise ConfigError(
+            f"Instrument {name!r} range must satisfy 0 <= low <= high <= 127"
+        )
+    return program, low_note, high_note
 
 
 def degree_to_semitones(token: Any) -> int:
