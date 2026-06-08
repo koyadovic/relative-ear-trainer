@@ -29,7 +29,8 @@ INSTRUMENTS_PATH = PROJECT_ROOT / "config" / "instruments.yaml"
 
 TIMBRE_COLUMNS = 6
 RANDOM_LABEL = "Random"
-INTERVAL_MODES = ("Ascending", "Descending", "Harmonic", RANDOM_LABEL)
+INTERVAL_MODES = ("Ascending", "Descending", "Harmonic")
+HARMONY_MODES = (*INTERVAL_MODES, RANDOM_LABEL)
 DURATION_LABELS = ("Short", "Medium", "Long")
 DEFAULT_DURATION_LABEL = "Medium"
 HARMONY_INVERSION_OPTIONS = (
@@ -183,7 +184,6 @@ class BaseTrainerTab(ttk.Frame):
         self.settings_key = settings_key
         self.instruments = instruments
         self.instrument_names = [instrument.name for instrument in instruments]
-        self.instruments_by_name = {instrument.name: instrument for instrument in instruments}
         self.definitions = definitions
         self.title = title
         self.running = False
@@ -195,14 +195,27 @@ class BaseTrainerTab(ttk.Frame):
         self._settings_save_after_id: str | None = None
         self.on_start = on_start
 
-        self.timbre_var = tk.StringVar(
-            value=self.settings.option(
+        selected_instruments = self.settings.selected_values(
+            self.settings_key,
+            "instruments",
+            self.instrument_names,
+        )
+        if selected_instruments is None:
+            legacy_instrument = self.settings.option(
                 self.settings_key,
                 "instrument",
                 [*self.instrument_names, RANDOM_LABEL],
                 RANDOM_LABEL,
             )
-        )
+            selected_instruments = (
+                set(self.instrument_names)
+                if legacy_instrument == RANDOM_LABEL
+                else {legacy_instrument}
+            )
+        self.instrument_vars = {
+            name: tk.BooleanVar(value=name in selected_instruments)
+            for name in self.instrument_names
+        }
         self.duration_var = tk.StringVar(
             value=self.settings.option(
                 self.settings_key,
@@ -254,14 +267,7 @@ class BaseTrainerTab(ttk.Frame):
         )
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
-        for index, label in enumerate((*self.instrument_names, RANDOM_LABEL)):
-            row, column = divmod(index, TIMBRE_COLUMNS)
-            ttk.Radiobutton(
-                timbre_frame,
-                text=label,
-                value=label,
-                variable=self.timbre_var,
-            ).grid(row=row, column=column, padx=4, sticky="w")
+        self._build_instrument_selector(timbre_frame)
 
         duration_frame = ttk.LabelFrame(header, text="Duration", padding=8)
         duration_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
@@ -272,6 +278,17 @@ class BaseTrainerTab(ttk.Frame):
                 value=label,
                 variable=self.duration_var,
             ).grid(row=0, column=column, padx=4)
+
+    def _build_instrument_selector(self, parent: tk.Widget) -> None:
+        for index, label in enumerate(self.instrument_names):
+            row, column = divmod(index, TIMBRE_COLUMNS)
+            checkbutton = ttk.Checkbutton(
+                parent,
+                text=label,
+                variable=self.instrument_vars[label],
+            )
+            checkbutton.grid(row=row, column=column, padx=4, sticky="w")
+            self.selection_controls.append(checkbutton)
 
     def _build_definition_selector(self) -> None:
         outer = ttk.LabelFrame(self, text="Selection", padding=8)
@@ -476,8 +493,9 @@ class BaseTrainerTab(ttk.Frame):
     def _bind_selection_persistence(self) -> None:
         for variable in self.selection_vars.values():
             variable.trace_add("write", lambda *_args: self._queue_settings_save())
-        for variable in (self.timbre_var, self.duration_var):
+        for variable in self.instrument_vars.values():
             variable.trace_add("write", lambda *_args: self._queue_settings_save())
+        self.duration_var.trace_add("write", lambda *_args: self._queue_settings_save())
 
     def _queue_settings_save(self) -> None:
         self._sync_answer_buttons_with_selection()
@@ -494,7 +512,9 @@ class BaseTrainerTab(ttk.Frame):
         ]
         payload = {
             "selected": selected_names,
-            "instrument": self.timbre_var.get(),
+            "instruments": [
+                name for name in self.instrument_names if self.instrument_vars[name].get()
+            ],
             "duration": self.duration_var.get(),
         }
         payload.update(self._extra_settings_payload())
@@ -511,6 +531,13 @@ class BaseTrainerTab(ttk.Frame):
             definition
             for definition in self.definitions
             if self.selection_vars[definition.name].get()
+        ]
+
+    def _active_instruments(self) -> list[InstrumentDefinition]:
+        return [
+            instrument
+            for instrument in self.instruments
+            if self.instrument_vars[instrument.name].get()
         ]
 
     def _sync_answer_buttons_with_selection(self) -> None:
@@ -544,6 +571,9 @@ class BaseTrainerTab(ttk.Frame):
     def _start(self) -> None:
         if not self._active_definitions():
             self.status_var.set("Select at least one option")
+            return
+        if not self._active_instruments():
+            self.status_var.set("Select at least one instrument")
             return
 
         if self.on_start is not None:
@@ -598,10 +628,10 @@ class BaseTrainerTab(ttk.Frame):
         raise NotImplementedError
 
     def _choose_instrument(self) -> InstrumentDefinition:
-        instrument_name = self.timbre_var.get()
-        if instrument_name == RANDOM_LABEL:
-            return random.choice(self.instruments)
-        return self.instruments_by_name.get(instrument_name, self.instruments[0])
+        active_instruments = self._active_instruments()
+        if not active_instruments:
+            return self.instruments[0]
+        return random.choice(active_instruments)
 
     def _choose_root_for_offsets(
         self,
@@ -765,15 +795,25 @@ class IntervalTrainerTab(BaseTrainerTab):
         definitions: tuple[MusicDefinition, ...],
         on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
-        self.interval_mode_var = tk.StringVar(
-            master=parent,
-            value=settings.option(
+        selected_modes = settings.selected_values(
+            "intervals",
+            "modes",
+            list(INTERVAL_MODES),
+        )
+        if selected_modes is None:
+            legacy_mode = settings.option(
                 "intervals",
                 "mode",
-                list(INTERVAL_MODES),
+                [*INTERVAL_MODES, RANDOM_LABEL],
                 RANDOM_LABEL,
-            ),
-        )
+            )
+            selected_modes = (
+                set(INTERVAL_MODES) if legacy_mode == RANDOM_LABEL else {legacy_mode}
+            )
+        self.interval_mode_vars = {
+            mode: tk.BooleanVar(master=parent, value=mode in selected_modes)
+            for mode in INTERVAL_MODES
+        }
         super().__init__(
             parent,
             player,
@@ -799,24 +839,18 @@ class IntervalTrainerTab(BaseTrainerTab):
 
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
-        for index, label in enumerate((*self.instrument_names, RANDOM_LABEL)):
-            row, column = divmod(index, TIMBRE_COLUMNS)
-            ttk.Radiobutton(
-                timbre_frame,
-                text=label,
-                value=label,
-                variable=self.timbre_var,
-            ).grid(row=row, column=column, padx=4, sticky="w")
+        self._build_instrument_selector(timbre_frame)
 
         mode_frame = ttk.LabelFrame(header, text="Mode", padding=8)
         mode_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
         for column, label in enumerate(INTERVAL_MODES):
-            ttk.Radiobutton(
+            checkbutton = ttk.Checkbutton(
                 mode_frame,
                 text=label,
-                value=label,
-                variable=self.interval_mode_var,
-            ).grid(row=0, column=column, padx=4)
+                variable=self.interval_mode_vars[label],
+            )
+            checkbutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(checkbutton)
 
         duration_frame = ttk.LabelFrame(header, text="Duration", padding=8)
         duration_frame.grid(row=2, column=1, sticky="e", pady=(6, 0))
@@ -830,18 +864,23 @@ class IntervalTrainerTab(BaseTrainerTab):
 
     def _bind_selection_persistence(self) -> None:
         super()._bind_selection_persistence()
-        self.interval_mode_var.trace_add(
-            "write",
-            lambda *_args: self._queue_settings_save(),
-        )
+        for variable in self.interval_mode_vars.values():
+            variable.trace_add("write", lambda *_args: self._queue_settings_save())
 
     def _extra_settings_payload(self) -> dict[str, str | list[str]]:
-        return {"mode": self.interval_mode_var.get()}
+        return {"modes": self._active_interval_modes()}
+
+    def _active_interval_modes(self) -> list[str]:
+        return [mode for mode in INTERVAL_MODES if self.interval_mode_vars[mode].get()]
+
+    def _start(self) -> None:
+        if not self._active_interval_modes():
+            self.status_var.set("Select at least one mode")
+            return
+        super()._start()
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
-        mode = self.interval_mode_var.get()
-        if mode == RANDOM_LABEL:
-            mode = random.choice(("Ascending", "Descending", "Harmonic"))
+        mode = random.choice(self._active_interval_modes())
 
         timing = self._duration_profile()
         instrument = self._choose_instrument()
@@ -922,7 +961,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
             value=settings.option(
                 "harmonies",
                 "mode",
-                list(INTERVAL_MODES),
+                list(HARMONY_MODES),
                 "Harmonic",
             ),
         )
@@ -965,18 +1004,11 @@ class HarmonyTrainerTab(BaseTrainerTab):
         )
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
-        for index, label in enumerate((*self.instrument_names, RANDOM_LABEL)):
-            row, column = divmod(index, TIMBRE_COLUMNS)
-            ttk.Radiobutton(
-                timbre_frame,
-                text=label,
-                value=label,
-                variable=self.timbre_var,
-            ).grid(row=row, column=column, padx=4, sticky="w")
+        self._build_instrument_selector(timbre_frame)
 
         mode_frame = ttk.LabelFrame(header, text="Mode", padding=8)
         mode_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
-        for column, label in enumerate(INTERVAL_MODES):
+        for column, label in enumerate(HARMONY_MODES):
             ttk.Radiobutton(
                 mode_frame,
                 text=label,

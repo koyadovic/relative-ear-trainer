@@ -11,13 +11,14 @@ trainer, or configurable MIDI ear training tool.
 
 ## Features
 
-- Interval ear training with ascending, descending, harmonic, and random modes.
+- Interval ear training with selectable ascending, descending, and harmonic
+  modes.
 - Harmony training for triads, seventh chords, extensions, altered chords, and
   inversions.
 - Harmonic function training with configurable roman-numeral progressions.
 - YAML-based exercises for adding custom intervals, chords, and progressions.
-- General MIDI instruments including piano, guitar, violin, vibraphone, marimba,
-  flute, oboe, saxophone, trumpet, and sitar.
+- Multi-select General MIDI instruments including piano, guitar, violin,
+  vibraphone, marimba, flute, oboe, saxophone, trumpet, and sitar.
 - Configurable comfortable MIDI ranges per instrument.
 - Short, medium, and long playback durations.
 - Persistent practice settings per tab.
@@ -95,16 +96,18 @@ instruments:
   Flute: [73, 60, 108]
 ```
 
-The format is `[program, low_note, high_note]`. The app picks roots that keep
-the current interval, chord, inversion, or progression inside the selected
-instrument range.
+The format is `[program, low_note, high_note]`. The app randomizes playback
+among the instruments selected in the current tab, then picks roots that keep
+the current interval, chord, inversion, or progression inside that instrument
+range.
 
 ## Saved Practice Sets
 
 The app remembers the last UI settings for each training tab: selected material,
-instrument, playback duration, mode, active harmony inversions, and the active
-tab. This lets you start with a small group, consolidate it, and gradually add
-more material without rebuilding the same setup every time.
+selected instruments, playback duration, interval modes, harmony mode, active
+harmony inversions, and the active tab. This lets you start with a small group,
+consolidate it, and gradually add more material without rebuilding the same
+setup every time.
 
 Each answer also tracks attempts, correct answers, and accuracy percentage.
 Stats are saved per tab and can be reset from that tab without affecting the
