@@ -2,16 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import hashlib
 import os
 import shutil
 import struct
 import subprocess
 import tempfile
 import threading
+import wave
 
 
 TICKS_PER_BEAT = 480
 DEFAULT_TEMPO_MICROSECONDS = 500_000
+AUDIBILITY_CACHE_VERSION = 1
+AUDIBILITY_SIGNAL_THRESHOLD = 16
+AUDIBILITY_NOTE_DURATION_TICKS = 480
+AUDIBILITY_NOTE_STEP_TICKS = 720
+AUDIBILITY_ANALYSIS_DELAY_TICKS = 80
 
 SOUNDFONT_CANDIDATES = (
     os.environ.get("EAR_TRAINER_SOUNDFONT"),
@@ -49,6 +56,25 @@ class MidiPlayer:
         if kind == "aplaymidi":
             return f"aplaymidi port {self._backend.port}"
         return "No MIDI player"
+
+    def audibility_cache_key(self) -> str | None:
+        signature = self._backend.audibility_signature()
+        if signature is None:
+            return None
+        payload = f"{AUDIBILITY_CACHE_VERSION}:{signature}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def measure_audible_pitches(self, program: int, pitches: list[int]) -> set[int] | None:
+        if self._backend.kind != "fluidsynth":
+            return None
+        if not self._backend.executable or not self._backend.soundfont:
+            return None
+        return _measure_fluidsynth_audible_pitches(
+            executable=self._backend.executable,
+            soundfont=self._backend.soundfont,
+            program=program,
+            pitches=pitches,
+        )
 
     def play(self, program: int, notes: list[MidiNote]) -> None:
         if not notes:
@@ -123,6 +149,19 @@ class _Backend:
             return [self.executable, "-p", self.port, str(midi_path)]
         raise PlaybackError("MIDI backend is not configured")
 
+    def audibility_signature(self) -> str | None:
+        if self.kind == "fluidsynth" and self.executable and self.soundfont:
+            soundfont = Path(self.soundfont).expanduser()
+            try:
+                stat = soundfont.stat()
+            except OSError:
+                return None
+            return (
+                f"fluidsynth|{self.executable}|{soundfont}|"
+                f"{stat.st_mtime_ns}|{stat.st_size}"
+            )
+        return None
+
 
 def build_midi(program: int, notes: list[MidiNote]) -> bytes:
     track = bytearray()
@@ -147,6 +186,117 @@ def build_midi(program: int, notes: list[MidiNote]) -> bytes:
     track += _varlen(0) + b"\xff\x2f\x00"
     header = b"MThd" + struct.pack(">IHHH", 6, 0, 1, TICKS_PER_BEAT)
     return header + b"MTrk" + struct.pack(">I", len(track)) + bytes(track)
+
+
+def _measure_fluidsynth_audible_pitches(
+    executable: str,
+    soundfont: str,
+    program: int,
+    pitches: list[int],
+) -> set[int] | None:
+    normalized_pitches = sorted({max(0, min(127, int(pitch))) for pitch in pitches})
+    if not normalized_pitches:
+        return set()
+
+    notes = [
+        MidiNote(
+            start=index * AUDIBILITY_NOTE_STEP_TICKS,
+            duration=AUDIBILITY_NOTE_DURATION_TICKS,
+            pitch=pitch,
+            velocity=120,
+        )
+        for index, pitch in enumerate(normalized_pitches)
+    ]
+
+    handle = tempfile.NamedTemporaryFile(prefix="ear-trainer-audibility-", suffix=".mid", delete=False)
+    midi_path = Path(handle.name)
+    with handle:
+        handle.write(build_midi(program=program, notes=notes))
+
+    wav_handle = tempfile.NamedTemporaryFile(
+        prefix="ear-trainer-audibility-",
+        suffix=".wav",
+        delete=False,
+    )
+    wav_path = Path(wav_handle.name)
+    wav_handle.close()
+
+    try:
+        result = subprocess.run(
+            [
+                executable,
+                "-ni",
+                "-q",
+                "-g",
+                "1.0",
+                "-R",
+                "0",
+                "-C",
+                "0",
+                "-T",
+                "wav",
+                "-O",
+                "s16",
+                "-F",
+                str(wav_path),
+                soundfont,
+                str(midi_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        return _audible_pitches_from_wav(wav_path, normalized_pitches)
+    except (OSError, subprocess.TimeoutExpired, wave.Error):
+        return None
+    finally:
+        midi_path.unlink(missing_ok=True)
+        wav_path.unlink(missing_ok=True)
+
+
+def _audible_pitches_from_wav(wav_path: Path, pitches: list[int]) -> set[int]:
+    audible_pitches: set[int] = set()
+    with wave.open(str(wav_path), "rb") as wav_file:
+        channels = wav_file.getnchannels()
+        sample_width = wav_file.getsampwidth()
+        frame_rate = wav_file.getframerate()
+        frames = wav_file.readframes(wav_file.getnframes())
+
+    if sample_width != 2:
+        return set(pitches)
+
+    for index, pitch in enumerate(pitches):
+        note_start = index * AUDIBILITY_NOTE_STEP_TICKS
+        analysis_start = note_start + AUDIBILITY_ANALYSIS_DELAY_TICKS
+        analysis_end = note_start + AUDIBILITY_NOTE_DURATION_TICKS
+        start_frame = _ticks_to_frame(analysis_start, frame_rate)
+        end_frame = _ticks_to_frame(analysis_end, frame_rate)
+        if _pcm16_peak(frames, channels, start_frame, end_frame) >= AUDIBILITY_SIGNAL_THRESHOLD:
+            audible_pitches.add(pitch)
+
+    return audible_pitches
+
+
+def _ticks_to_frame(ticks: int, frame_rate: int) -> int:
+    seconds = (ticks / TICKS_PER_BEAT) * (DEFAULT_TEMPO_MICROSECONDS / 1_000_000)
+    return max(0, int(seconds * frame_rate))
+
+
+def _pcm16_peak(frames: bytes, channels: int, start_frame: int, end_frame: int) -> int:
+    start = max(0, start_frame * channels * 2)
+    end = max(start, end_frame * channels * 2)
+    segment = frames[start:end]
+    sample_count = len(segment) // 2
+    if sample_count == 0:
+        return 0
+    peak = 0
+    for index in range(sample_count):
+        sample = int.from_bytes(segment[index * 2 : index * 2 + 2], "little", signed=True)
+        peak = max(peak, abs(sample))
+    return peak
 
 
 def _detect_backend() -> _Backend:

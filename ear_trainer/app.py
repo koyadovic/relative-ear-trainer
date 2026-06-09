@@ -66,6 +66,10 @@ DURATION_PROFILES = {
 }
 
 
+class NoPlayableRangeError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class Challenge:
     answer: str
@@ -236,6 +240,7 @@ class BaseTrainerTab(ttk.Frame):
             self.selection_vars[definition.name] = tk.BooleanVar(value=selected)
         self.answer_buttons: dict[str, ttk.Button] = {}
         self.answer_stats = self.settings.stats(self.settings_key)
+        self._instrument_pitch_cache: dict[str, set[int]] = {}
         self.selection_controls: list[tk.Widget] = []
         self.definition_checkbuttons: list[ttk.Checkbutton] = []
         self.definition_grid_parent: ttk.Frame | None = None
@@ -614,7 +619,12 @@ class BaseTrainerTab(ttk.Frame):
             return
 
         definition = random.choice(active_definitions)
-        self.current = self._build_challenge(definition)
+        try:
+            self.current = self._build_challenge(definition)
+        except NoPlayableRangeError as exc:
+            self.stop_training()
+            self.status_var.set(str(exc))
+            return
         self.current_marked_answer = None
         self.current_marked_correct = None
         self._set_answer_buttons_enabled(True)
@@ -626,20 +636,34 @@ class BaseTrainerTab(ttk.Frame):
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         raise NotImplementedError
 
-    def _choose_instrument(self) -> InstrumentDefinition:
+    def _choose_instrument_and_root(
+        self,
+        offsets: Iterable[int],
+    ) -> tuple[InstrumentDefinition, int]:
         active_instruments = self._active_instruments()
-        if not active_instruments:
-            return self.instruments[0]
-        return random.choice(active_instruments)
+        random.shuffle(active_instruments)
+        offset_values = tuple(offsets) or (0,)
+        for instrument in active_instruments:
+            root = self._choose_root_for_offsets(instrument, offset_values)
+            if root is not None:
+                return instrument, root
+
+        raise NoPlayableRangeError(
+            "No selected instrument can play every note in the current selection"
+        )
 
     def _choose_root_for_offsets(
         self,
         instrument: InstrumentDefinition,
         offsets: Iterable[int],
-    ) -> int:
+    ) -> int | None:
         offset_values = tuple(offsets) or (0,)
-        low_note = instrument.low_note
-        high_note = instrument.high_note
+        playable_pitches = self._playable_pitches_for_instrument(instrument)
+        if not playable_pitches:
+            return None
+
+        low_note = min(playable_pitches)
+        high_note = max(playable_pitches)
         min_offset = min(offset_values)
         max_offset = max(offset_values)
         min_root = max(0, low_note - min_offset)
@@ -648,14 +672,68 @@ class BaseTrainerTab(ttk.Frame):
         if min_root <= max_root:
             pitch_class = random.randrange(12)
             candidates = [
-                root for root in range(min_root, max_root + 1) if root % 12 == pitch_class
+                root
+                for root in range(min_root, max_root + 1)
+                if root % 12 == pitch_class
+                and all(root + offset in playable_pitches for offset in offset_values)
             ]
             if candidates:
                 return random.choice(candidates)
-            return random.randint(min_root, max_root)
+            candidates = [
+                root
+                for root in range(min_root, max_root + 1)
+                if all(root + offset in playable_pitches for offset in offset_values)
+            ]
+            if candidates:
+                return random.choice(candidates)
 
-        centered_root = (low_note + high_note - min_offset - max_offset) // 2
-        return max(0, min(127, centered_root))
+        return None
+
+    def _playable_pitches_for_instrument(self, instrument: InstrumentDefinition) -> set[int]:
+        cached_pitches = self._instrument_pitch_cache.get(instrument.name)
+        if cached_pitches is not None:
+            return cached_pitches
+
+        configured_pitches = set(range(instrument.low_note, instrument.high_note + 1))
+        backend_key = self.player.audibility_cache_key()
+        if backend_key is None:
+            self._instrument_pitch_cache[instrument.name] = configured_pitches
+            return configured_pitches
+
+        stored_pitches = self.settings.audible_pitches(
+            backend_key=backend_key,
+            instrument_name=instrument.name,
+            program=instrument.program,
+            low_note=instrument.low_note,
+            high_note=instrument.high_note,
+        )
+        if stored_pitches is not None:
+            self._instrument_pitch_cache[instrument.name] = stored_pitches
+            return stored_pitches
+
+        self.status_var.set(f"Checking {instrument.name} MIDI range")
+        self.update_idletasks()
+        measured_pitches = self.player.measure_audible_pitches(
+            program=instrument.program,
+            pitches=sorted(configured_pitches),
+        )
+        if measured_pitches is None:
+            self._instrument_pitch_cache[instrument.name] = configured_pitches
+            return configured_pitches
+
+        try:
+            self.settings.save_audible_pitches(
+                backend_key=backend_key,
+                instrument_name=instrument.name,
+                program=instrument.program,
+                low_note=instrument.low_note,
+                high_note=instrument.high_note,
+                pitches=measured_pitches,
+            )
+        except OSError as exc:
+            self.status_var.set(f"Could not save MIDI range: {exc}")
+        self._instrument_pitch_cache[instrument.name] = measured_pitches
+        return measured_pitches
 
     def _duration_profile(self) -> dict[str, int]:
         return DURATION_PROFILES.get(
@@ -882,7 +960,6 @@ class IntervalTrainerTab(BaseTrainerTab):
         mode = random.choice(self._active_interval_modes())
 
         timing = self._duration_profile()
-        instrument = self._choose_instrument()
         active_definitions = self._active_definitions()
         offsets = [0]
         if mode == "Descending":
@@ -893,7 +970,7 @@ class IntervalTrainerTab(BaseTrainerTab):
             offsets.extend(
                 active_definition.semitones[0] for active_definition in active_definitions
             )
-        root = self._choose_root_for_offsets(instrument, offsets)
+        instrument, root = self._choose_instrument_and_root(offsets)
         answer_notes = {
             active_definition.name: self._build_interval_notes(
                 interval=active_definition.semitones[0],
@@ -1123,11 +1200,9 @@ class HarmonyTrainerTab(BaseTrainerTab):
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         timing = self._duration_profile()
-        instrument = self._choose_instrument()
         active_definitions = self._active_definitions()
-        root = self._choose_root_for_offsets(
-            instrument,
-            self._harmony_answer_offsets(active_definitions),
+        instrument, root = self._choose_instrument_and_root(
+            self._harmony_answer_offsets(active_definitions)
         )
         inversion = random.choice(self._active_inversions(len(definition.semitones)))
         mode = self._actual_harmony_mode()
@@ -1291,11 +1366,9 @@ class ProgressionTrainerTab(BaseTrainerTab):
 
     def _build_challenge(self, definition: ProgressionDefinition) -> Challenge:
         timing = self._duration_profile()
-        instrument = self._choose_instrument()
         active_definitions = self._active_definitions()
-        tonic = self._choose_root_for_offsets(
-            instrument,
-            self._progression_answer_offsets(active_definitions),
+        instrument, tonic = self._choose_instrument_and_root(
+            self._progression_answer_offsets(active_definitions)
         )
         answer_notes = {
             active_definition.name: self._build_progression_notes(

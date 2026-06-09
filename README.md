@@ -11,8 +11,8 @@ trainer, or configurable MIDI ear training tool.
 
 ## Features
 
-- Interval ear training with selectable ascending, descending, and harmonic
-  modes.
+- Interval ear training across two octaves with selectable ascending,
+  descending, and harmonic modes.
 - Harmony training for triads, seventh chords, extensions, altered chords,
   inversions, and selectable playback modes.
 - Harmonic function training with configurable roman-numeral progressions.
@@ -63,8 +63,8 @@ harmonies:
 ```
 
 Supported accidentals: `b`, `#`, including double accidentals such as `bb7`.
-Extensions such as `b9`, `9`, `#11`, `b13`, and `13` are calculated in the
-corresponding octave.
+Compound intervals such as `b9`, `9`, `b10`, `10`, `b12`, `12`, `b13`, `13`,
+`b14`, `14`, and `15` are calculated in the corresponding octave.
 
 Progressions use roman numerals plus a harmony suffix. The suffix is resolved
 from `config/harmonies.yaml`, so `IIm7` uses the `m7` harmony formula and
@@ -101,6 +101,13 @@ among the instruments selected in the current tab, then picks roots that keep
 the current interval, chord, inversion, or progression inside that instrument
 range.
 
+When the MIDI backend supports offline rendering, the app checks which pitches
+actually produce audio for each configured instrument and stores that result in
+the user settings. Training uses that effective pitch set in every tab, so
+intervals, harmonies, and harmonic function progressions only choose roots whose
+notes are playable by the current backend. Backends that cannot be measured use
+the YAML range as the effective range.
+
 ## Saved Practice Sets
 
 The app remembers the last UI settings for each training tab: selected material,
@@ -120,6 +127,10 @@ Settings and stats are saved in:
 ```
 
 You can override the settings path with `EAR_TRAINER_SETTINGS`.
+
+Measured MIDI pitch sets are stored in the same settings file and are keyed by
+the current MIDI backend and soundfont metadata, so they are recomputed when the
+backend configuration changes.
 
 ## MIDI
 

@@ -74,6 +74,63 @@ class SettingsStore:
         section_data["stats"] = {}
         self._save()
 
+    def audible_pitches(
+        self,
+        backend_key: str,
+        instrument_name: str,
+        program: int,
+        low_note: int,
+        high_note: int,
+    ) -> set[int] | None:
+        raw_cache = self._section_data("midi").get("audible_pitches", {})
+        if not isinstance(raw_cache, dict):
+            return None
+        raw_backend_cache = raw_cache.get(backend_key, {})
+        if not isinstance(raw_backend_cache, dict):
+            return None
+        raw_entry = raw_backend_cache.get(instrument_name)
+        if not isinstance(raw_entry, dict):
+            return None
+        if raw_entry.get("program") != program:
+            return None
+        if raw_entry.get("range") != [low_note, high_note]:
+            return None
+
+        raw_pitches = raw_entry.get("pitches")
+        if not isinstance(raw_pitches, list):
+            return None
+        return {
+            pitch
+            for pitch in (_coerce_midi_note(raw_pitch) for raw_pitch in raw_pitches)
+            if pitch is not None and low_note <= pitch <= high_note
+        }
+
+    def save_audible_pitches(
+        self,
+        backend_key: str,
+        instrument_name: str,
+        program: int,
+        low_note: int,
+        high_note: int,
+        pitches: set[int],
+    ) -> None:
+        midi_data = self._ensure_section_data("midi")
+        raw_cache = midi_data.setdefault("audible_pitches", {})
+        if not isinstance(raw_cache, dict):
+            raw_cache = {}
+            midi_data["audible_pitches"] = raw_cache
+        raw_backend_cache = raw_cache.setdefault(backend_key, {})
+        if not isinstance(raw_backend_cache, dict):
+            raw_backend_cache = {}
+            raw_cache[backend_key] = raw_backend_cache
+
+        raw_backend_cache[instrument_name] = {
+            "program": program,
+            "range": [low_note, high_note],
+            "pitches": sorted(pitches),
+        }
+        self._save()
+
     def _section_data(self, section: str) -> dict[str, Any]:
         section_data = self._data.get(section, {})
         if not isinstance(section_data, dict):
@@ -136,6 +193,16 @@ def _coerce_non_negative_int(value: Any) -> int:
         return max(0, int(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _coerce_midi_note(value: Any) -> int | None:
+    try:
+        note = int(value)
+    except (TypeError, ValueError):
+        return None
+    if 0 <= note <= 127:
+        return note
+    return None
 
 
 def _normalize_stats(raw_stats: dict[str, Any]) -> dict[str, dict[str, int]]:
