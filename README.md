@@ -15,7 +15,8 @@ trainer, or configurable MIDI ear training tool.
   descending, and harmonic modes.
 - Harmony training for triads, seventh chords, extensions, altered chords,
   inversions, and selectable playback modes.
-- Harmonic function training with configurable roman-numeral progressions.
+- Optional harmonic function training with configurable roman-numeral
+  progressions.
 - YAML-based exercises for adding custom intervals, chords, and progressions.
 - Multi-select General MIDI instruments including piano, guitar, violin,
   vibraphone, marimba, flute, oboe, saxophone, trumpet, and sitar.
@@ -132,6 +133,19 @@ You can override the settings path with `EAR_TRAINER_SETTINGS`.
 Measured MIDI pitch sets are stored in the same settings file and are keyed by
 the current MIDI backend and soundfont metadata, so they are recomputed when the
 backend configuration changes.
+
+## Feature Flags
+
+The app shows only interval and harmony training by default. The harmonic
+function trainer is still available but hidden while it is being refined.
+
+Enable specific tabs with `EAR_TRAINER_TABS`:
+
+```bash
+EAR_TRAINER_TABS=intervals,harmonies,progressions ./app.sh
+```
+
+Supported tab keys are `intervals`, `harmonies`, and `progressions`.
 
 ## MIDI
 

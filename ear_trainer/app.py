@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
+import os
 import random
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -26,6 +27,12 @@ INTERVALS_PATH = PROJECT_ROOT / "config" / "intervals.yaml"
 HARMONIES_PATH = PROJECT_ROOT / "config" / "harmonies.yaml"
 PROGRESSIONS_PATH = PROJECT_ROOT / "config" / "progressions.yaml"
 INSTRUMENTS_PATH = PROJECT_ROOT / "config" / "instruments.yaml"
+ENABLED_TABS_ENV_VAR = "EAR_TRAINER_TABS"
+TAB_INTERVALS = "intervals"
+TAB_HARMONIES = "harmonies"
+TAB_PROGRESSIONS = "progressions"
+AVAILABLE_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES, TAB_PROGRESSIONS)
+DEFAULT_ENABLED_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES)
 
 TIMBRE_COLUMNS = 6
 RANDOM_LABEL = "Random"
@@ -71,6 +78,29 @@ class NoPlayableRangeError(RuntimeError):
     pass
 
 
+def _parse_enabled_tab_keys(raw_value: str) -> set[str]:
+    aliases = {
+        "interval": TAB_INTERVALS,
+        "intervals": TAB_INTERVALS,
+        "harmony": TAB_HARMONIES,
+        "harmonies": TAB_HARMONIES,
+        "progression": TAB_PROGRESSIONS,
+        "progressions": TAB_PROGRESSIONS,
+        "harmonic_functions": TAB_PROGRESSIONS,
+        "harmonic-functions": TAB_PROGRESSIONS,
+        "functions": TAB_PROGRESSIONS,
+    }
+    enabled_tabs: set[str] = set()
+    for raw_part in raw_value.split(","):
+        normalized = raw_part.strip().lower()
+        if not normalized:
+            continue
+        tab_key = aliases.get(normalized)
+        if tab_key is not None:
+            enabled_tabs.add(tab_key)
+    return enabled_tabs
+
+
 @dataclass(frozen=True)
 class Challenge:
     answer: str
@@ -105,6 +135,7 @@ class EarTrainerApp(tk.Tk):
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True)
         self.notebook = notebook
+        enabled_tab_keys = self._enabled_tab_keys()
         interval_tab = IntervalTrainerTab(
             notebook,
             self.player,
@@ -129,29 +160,51 @@ class EarTrainerApp(tk.Tk):
             progression_definitions,
             self._stop_other_tabs,
         )
-        self.trainer_tabs = [interval_tab, harmony_tab, progression_tab]
+        available_tabs = {
+            TAB_INTERVALS: (interval_tab, "Intervals"),
+            TAB_HARMONIES: (harmony_tab, "Harmonies"),
+            TAB_PROGRESSIONS: (progression_tab, "Harmonic Functions"),
+        }
+        self.trainer_tabs = [available_tabs[key][0] for key in enabled_tab_keys]
 
-        notebook.add(interval_tab, text="Intervals")
-        notebook.add(harmony_tab, text="Harmonies")
-        notebook.add(progression_tab, text="Harmonic Functions")
+        for key in enabled_tab_keys:
+            tab, label = available_tabs[key]
+            notebook.add(tab, text=label)
         self.tab_keys = {
-            str(interval_tab): "intervals",
-            str(harmony_tab): "harmonies",
-            str(progression_tab): "progressions",
+            str(tab): key
+            for key, (tab, _label) in available_tabs.items()
+            if key in enabled_tab_keys
         }
 
         active_tab_key = self.settings.option(
             "ui",
             "active_tab",
             list(self.tab_keys.values()),
-            "intervals",
+            TAB_INTERVALS,
         )
         active_tab = next(
             (tab for tab in self.trainer_tabs if self.tab_keys[str(tab)] == active_tab_key),
-            interval_tab,
+            self.trainer_tabs[0],
         )
         notebook.select(active_tab)
         notebook.bind("<<NotebookTabChanged>>", self._save_active_tab)
+
+    def _enabled_tab_keys(self) -> tuple[str, ...]:
+        enabled_from_env = os.environ.get(ENABLED_TABS_ENV_VAR)
+        if enabled_from_env is not None:
+            enabled_tab_keys = _parse_enabled_tab_keys(enabled_from_env)
+        else:
+            enabled_tab_keys = self.settings.selected_values(
+                "features",
+                "enabled_tabs",
+                list(AVAILABLE_TAB_KEYS),
+            )
+
+        if not enabled_tab_keys:
+            return DEFAULT_ENABLED_TAB_KEYS
+
+        ordered_keys = tuple(key for key in AVAILABLE_TAB_KEYS if key in enabled_tab_keys)
+        return ordered_keys or DEFAULT_ENABLED_TAB_KEYS
 
     def _configure_style(self) -> None:
         style = ttk.Style(self)
