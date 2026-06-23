@@ -103,10 +103,11 @@ range.
 
 When the MIDI backend supports offline rendering, the app checks which pitches
 actually produce audio for each configured instrument and stores that result in
-the user settings. Training uses that effective pitch set in every tab, so
-intervals, harmonies, and harmonic function progressions only choose roots whose
-notes are playable by the current backend. Backends that cannot be measured use
-the YAML range as the effective range.
+the user settings. Training uses the central part of that effective pitch set,
+discarding the lowest playable octave and the highest playable octave in every
+tab. Intervals, harmonies, and harmonic function progressions only choose roots
+whose notes are inside that final usable range. Backends that cannot be measured
+use the central part of the YAML range instead.
 
 ## Saved Practice Sets
 

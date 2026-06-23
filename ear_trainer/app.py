@@ -30,6 +30,7 @@ INSTRUMENTS_PATH = PROJECT_ROOT / "config" / "instruments.yaml"
 TIMBRE_COLUMNS = 6
 RANDOM_LABEL = "Random"
 INTERVAL_MODES = ("Ascending", "Descending", "Harmonic")
+PLAYABLE_PITCH_EDGE_MARGIN = 12
 DURATION_LABELS = ("Short", "Medium", "Long")
 DEFAULT_DURATION_LABEL = "Medium"
 HARMONY_INVERSION_OPTIONS = (
@@ -229,7 +230,7 @@ class BaseTrainerTab(ttk.Frame):
         )
         self.status_var = tk.StringVar(value=f"MIDI: {self.player.describe_backend()}")
         self.feedback_var = tk.StringVar(value="")
-        self.score_var = tk.StringVar(value="Correct: 0/0")
+        self.score_var = tk.StringVar(value=self._score_text())
         selected_names = self.settings.selected_names(
             self.settings_key,
             [definition.name for definition in self.definitions],
@@ -587,7 +588,7 @@ class BaseTrainerTab(ttk.Frame):
         self.correct_count = 0
         self.total_count = 0
         self.feedback_var.set("")
-        self.score_var.set("Correct: 0/0")
+        self.score_var.set(self._score_text())
         self.start_button.configure(text="Stop")
         self.replay_button.configure(state=tk.NORMAL)
         self.next_button.configure(state=tk.DISABLED)
@@ -697,8 +698,9 @@ class BaseTrainerTab(ttk.Frame):
         configured_pitches = set(range(instrument.low_note, instrument.high_note + 1))
         backend_key = self.player.audibility_cache_key()
         if backend_key is None:
-            self._instrument_pitch_cache[instrument.name] = configured_pitches
-            return configured_pitches
+            effective_pitches = self._effective_pitch_set(configured_pitches)
+            self._instrument_pitch_cache[instrument.name] = effective_pitches
+            return effective_pitches
 
         stored_pitches = self.settings.audible_pitches(
             backend_key=backend_key,
@@ -708,8 +710,9 @@ class BaseTrainerTab(ttk.Frame):
             high_note=instrument.high_note,
         )
         if stored_pitches is not None:
-            self._instrument_pitch_cache[instrument.name] = stored_pitches
-            return stored_pitches
+            effective_pitches = self._effective_pitch_set(stored_pitches)
+            self._instrument_pitch_cache[instrument.name] = effective_pitches
+            return effective_pitches
 
         self.status_var.set(f"Checking {instrument.name} MIDI range")
         self.update_idletasks()
@@ -718,8 +721,9 @@ class BaseTrainerTab(ttk.Frame):
             pitches=sorted(configured_pitches),
         )
         if measured_pitches is None:
-            self._instrument_pitch_cache[instrument.name] = configured_pitches
-            return configured_pitches
+            effective_pitches = self._effective_pitch_set(configured_pitches)
+            self._instrument_pitch_cache[instrument.name] = effective_pitches
+            return effective_pitches
 
         try:
             self.settings.save_audible_pitches(
@@ -732,8 +736,19 @@ class BaseTrainerTab(ttk.Frame):
             )
         except OSError as exc:
             self.status_var.set(f"Could not save MIDI range: {exc}")
-        self._instrument_pitch_cache[instrument.name] = measured_pitches
-        return measured_pitches
+        effective_pitches = self._effective_pitch_set(measured_pitches)
+        self._instrument_pitch_cache[instrument.name] = effective_pitches
+        return effective_pitches
+
+    def _effective_pitch_set(self, pitches: set[int]) -> set[int]:
+        if not pitches:
+            return set()
+
+        low_note = min(pitches) + PLAYABLE_PITCH_EDGE_MARGIN
+        high_note = max(pitches) - PLAYABLE_PITCH_EDGE_MARGIN
+        if low_note > high_note:
+            return set()
+        return {pitch for pitch in pitches if low_note <= pitch <= high_note}
 
     def _duration_profile(self) -> dict[str, int]:
         return DURATION_PROFILES.get(
@@ -771,9 +786,15 @@ class BaseTrainerTab(ttk.Frame):
         self.current_marked_correct = correct
         self.feedback_var.set(feedback)
         self.status_var.set(stats_error or "Review the answer")
-        self.score_var.set(f"Correct: {self.correct_count}/{self.total_count}")
+        self.score_var.set(self._score_text())
         self.next_button.configure(state=tk.NORMAL)
         self._play_answer(answer)
+
+    def _score_text(self) -> str:
+        if self.total_count == 0:
+            return "Correct: 0/0 (0%)"
+        percentage = round((self.correct_count / self.total_count) * 100)
+        return f"Correct: {self.correct_count}/{self.total_count} ({percentage}%)"
 
     def _play_answer(self, answer: str) -> None:
         if self.current is None:
