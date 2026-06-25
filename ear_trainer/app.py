@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, TypeVar
 import os
 import random
 import tkinter as tk
@@ -33,6 +33,7 @@ TAB_HARMONIES = "harmonies"
 TAB_PROGRESSIONS = "progressions"
 AVAILABLE_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES, TAB_PROGRESSIONS)
 DEFAULT_ENABLED_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES)
+T = TypeVar("T")
 
 TIMBRE_COLUMNS = 6
 RANDOM_LABEL = "Random"
@@ -76,6 +77,13 @@ DURATION_PROFILES = {
 
 class NoPlayableRangeError(RuntimeError):
     pass
+
+
+def _weighted_choice_by_count(items: list[T], count_for: Callable[[T], int]) -> T:
+    counts = [max(0, count_for(item)) for item in items]
+    max_count = max(counts, default=0)
+    weights = [max_count - count + 1 for count in counts]
+    return random.choices(items, weights=weights, k=1)[0]
 
 
 def _parse_enabled_tab_keys(raw_value: str) -> set[str]:
@@ -294,6 +302,7 @@ class BaseTrainerTab(ttk.Frame):
             self.selection_vars[definition.name] = tk.BooleanVar(value=selected)
         self.answer_buttons: dict[str, ttk.Button] = {}
         self.answer_stats = self.settings.stats(self.settings_key)
+        self.challenge_counts: dict[str, int] = {}
         self._instrument_pitch_cache: dict[str, set[int]] = {}
         self.selection_controls: list[tk.Widget] = []
         self.definition_checkbuttons: list[ttk.Checkbutton] = []
@@ -638,6 +647,7 @@ class BaseTrainerTab(ttk.Frame):
             self.on_start(self)
         self._save_settings()
         self.running = True
+        self.challenge_counts = self._initial_challenge_counts()
         self.correct_count = 0
         self.total_count = 0
         self.feedback_var.set("")
@@ -672,13 +682,14 @@ class BaseTrainerTab(ttk.Frame):
             self.status_var.set("Select at least one option")
             return
 
-        definition = random.choice(active_definitions)
+        definition = self._choose_definition(active_definitions)
         try:
             self.current = self._build_challenge(definition)
         except NoPlayableRangeError as exc:
             self.stop_training()
             self.status_var.set(str(exc))
             return
+        self._record_challenge(self.current.answer)
         self.current_marked_answer = None
         self.current_marked_correct = None
         self._set_answer_buttons_enabled(True)
@@ -689,6 +700,29 @@ class BaseTrainerTab(ttk.Frame):
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         raise NotImplementedError
+
+    def _choose_definition(self, definitions: list[MusicDefinition]) -> MusicDefinition:
+        return _weighted_choice_by_count(definitions, self._definition_challenge_count)
+
+    def _definition_challenge_count(self, definition: MusicDefinition) -> int:
+        return self._answer_challenge_count(definition.name)
+
+    def _initial_challenge_counts(self) -> dict[str, int]:
+        return {
+            answer: int(self.answer_stats.get(answer, {}).get("attempts", 0))
+            for answer in self._active_balance_answer_names()
+        }
+
+    def _active_balance_answer_names(self) -> list[str]:
+        return [definition.name for definition in self._active_definitions()]
+
+    def _answer_challenge_count(self, answer: str) -> int:
+        if self.challenge_counts:
+            return self.challenge_counts.get(answer, 0)
+        return int(self.answer_stats.get(answer, {}).get("attempts", 0))
+
+    def _record_challenge(self, answer: str) -> None:
+        self.challenge_counts[answer] = self._answer_challenge_count(answer) + 1
 
     def _choose_instrument_and_root(
         self,
@@ -901,6 +935,7 @@ class BaseTrainerTab(ttk.Frame):
             return
 
         self.answer_stats = {}
+        self.challenge_counts = {}
         try:
             self.settings.reset_stats(self.settings_key)
         except OSError as exc:
@@ -1278,7 +1313,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         instrument, root = self._choose_instrument_and_root(
             self._harmony_answer_offsets(active_definitions)
         )
-        inversion = random.choice(self._active_inversions(len(definition.semitones)))
+        inversion = self._choose_inversion(definition)
         mode = self._actual_harmony_mode()
         answer_notes = self._build_harmony_answer_notes(
             root=root,
@@ -1296,6 +1331,25 @@ class HarmonyTrainerTab(BaseTrainerTab):
 
     def _actual_harmony_mode(self) -> str:
         return random.choice(self._active_harmony_modes())
+
+    def _definition_challenge_count(self, definition: MusicDefinition) -> int:
+        answer_counts = [
+            self._answer_challenge_count(self._answer_name(definition, inversion))
+            for inversion in self._active_inversions(len(definition.semitones))
+        ]
+        return min(answer_counts, default=0)
+
+    def _active_balance_answer_names(self) -> list[str]:
+        return self._active_answer_names()
+
+    def _choose_inversion(self, definition: MusicDefinition) -> int:
+        inversions = self._active_inversions(len(definition.semitones))
+        return _weighted_choice_by_count(
+            inversions,
+            lambda inversion: self._answer_challenge_count(
+                self._answer_name(definition, inversion)
+            ),
+        )
 
     def _build_harmony_answer_notes(
         self,
