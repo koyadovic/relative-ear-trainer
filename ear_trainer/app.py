@@ -34,6 +34,8 @@ TAB_PROGRESSIONS = "progressions"
 AVAILABLE_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES, TAB_PROGRESSIONS)
 DEFAULT_ENABLED_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES)
 T = TypeVar("T")
+ChallengeSignature = tuple[int, tuple[tuple[int, int, int, int], ...]]
+MAX_DISTINCT_CHALLENGE_ATTEMPTS = 50
 
 TIMBRE_COLUMNS = 6
 RANDOM_LABEL = "Random"
@@ -257,6 +259,7 @@ class BaseTrainerTab(ttk.Frame):
         self.current_marked_correct: bool | None = None
         self.correct_count = 0
         self.total_count = 0
+        self._last_challenge_signature: ChallengeSignature | None = None
         self._settings_save_after_id: str | None = None
         self.on_start = on_start
 
@@ -648,6 +651,7 @@ class BaseTrainerTab(ttk.Frame):
         self._save_settings()
         self.running = True
         self.challenge_counts = self._initial_challenge_counts()
+        self._last_challenge_signature = None
         self.correct_count = 0
         self.total_count = 0
         self.feedback_var.set("")
@@ -664,6 +668,7 @@ class BaseTrainerTab(ttk.Frame):
         self.current = None
         self.current_marked_answer = None
         self.current_marked_correct = None
+        self._last_challenge_signature = None
         self.start_button.configure(text="Start")
         self.replay_button.configure(state=tk.DISABLED)
         self.next_button.configure(state=tk.DISABLED)
@@ -682,13 +687,13 @@ class BaseTrainerTab(ttk.Frame):
             self.status_var.set("Select at least one option")
             return
 
-        definition = self._choose_definition(active_definitions)
         try:
-            self.current = self._build_challenge(definition)
+            self.current = self._build_next_distinct_challenge(active_definitions)
         except NoPlayableRangeError as exc:
             self.stop_training()
             self.status_var.set(str(exc))
             return
+        self._last_challenge_signature = self._challenge_signature(self.current)
         self._record_challenge(self.current.answer)
         self.current_marked_answer = None
         self.current_marked_correct = None
@@ -700,6 +705,43 @@ class BaseTrainerTab(ttk.Frame):
 
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         raise NotImplementedError
+
+    def _build_next_distinct_challenge(
+        self,
+        active_definitions: list[MusicDefinition],
+    ) -> Challenge:
+        fallback: Challenge | None = None
+        last_signature = self._last_challenge_signature
+
+        for _attempt in range(MAX_DISTINCT_CHALLENGE_ATTEMPTS):
+            definition = self._choose_definition(active_definitions)
+            challenge = self._build_challenge(definition)
+            if last_signature is None:
+                return challenge
+            if fallback is None:
+                fallback = challenge
+            if self._challenge_signature(challenge) != last_signature:
+                return challenge
+
+        if fallback is None:
+            raise NoPlayableRangeError(
+                "No selected instrument can play every note in the current selection"
+            )
+        return fallback
+
+    def _challenge_signature(self, challenge: Challenge) -> ChallengeSignature:
+        note_events = tuple(
+            sorted(
+                (
+                    note.start,
+                    note.duration,
+                    note.pitch,
+                    note.velocity,
+                )
+                for note in challenge.notes
+            )
+        )
+        return (challenge.program, note_events)
 
     def _choose_definition(self, definitions: list[MusicDefinition]) -> MusicDefinition:
         return _weighted_choice_by_count(definitions, self._definition_challenge_count)

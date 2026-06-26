@@ -25,6 +25,7 @@ trainer, or configurable MIDI ear training tool.
 - Persistent practice settings per tab.
 - Persistent per-answer accuracy stats with a per-tab reset.
 - Weighted challenge selection that favors answers with fewer previous attempts.
+- Consecutive exact repeats are skipped when another playable challenge is available.
 
 ## Run
 
