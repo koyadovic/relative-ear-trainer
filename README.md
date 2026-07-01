@@ -164,8 +164,8 @@ You can force a specific soundfont:
 EAR_TRAINER_SOUNDFONT=/path/to/soundfont.sf2 ./app.sh
 ```
 
-When using `timidity`, the app sends audio to the ALSA `default` output so it
-works with PipeWire/PulseAudio setups. You can override that output device:
+When using `timidity`, the app sends dry audio to the ALSA `default` output so
+it works with PipeWire/PulseAudio setups. You can override that output device:
 
 ```bash
 EAR_TRAINER_TIMIDITY_OUTPUT=plughw:0,0 ./app.sh

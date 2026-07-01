@@ -145,7 +145,7 @@ class _Backend:
         if self.kind == "fluidsynth" and self.executable and self.soundfont:
             return [self.executable, "-ni", "-q", "-g", "0.9", self.soundfont, str(midi_path)]
         if self.kind == "timidity" and self.executable:
-            command = [self.executable]
+            command = [self.executable, "-EFreverb=d", "-EFchorus=d", "-EFdelay=d"]
             if self.timidity_output:
                 command.extend(["-Os", "-o", self.timidity_output])
             command.append(str(midi_path))
