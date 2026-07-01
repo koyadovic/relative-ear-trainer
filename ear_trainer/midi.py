@@ -147,7 +147,7 @@ class _Backend:
         if self.kind == "timidity" and self.executable:
             command = [self.executable, "-EFreverb=d", "-EFchorus=d", "-EFdelay=d"]
             if self.timidity_output:
-                command.extend(["-Os", "-o", self.timidity_output])
+                command.extend(["-OsM", "-o", self.timidity_output])
             command.append(str(midi_path))
             return command
         if self.kind == "aplaymidi" and self.executable and self.port:
