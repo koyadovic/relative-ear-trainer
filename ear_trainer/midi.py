@@ -138,13 +138,18 @@ class _Backend:
     kind: str | None
     executable: str | None = None
     soundfont: str | None = None
+    timidity_output: str | None = None
     port: str | None = None
 
     def command_for(self, midi_path: Path) -> list[str]:
         if self.kind == "fluidsynth" and self.executable and self.soundfont:
             return [self.executable, "-ni", "-q", "-g", "0.9", self.soundfont, str(midi_path)]
         if self.kind == "timidity" and self.executable:
-            return [self.executable, "-q", str(midi_path)]
+            command = [self.executable]
+            if self.timidity_output:
+                command.extend(["-Os", "-o", self.timidity_output])
+            command.append(str(midi_path))
+            return command
         if self.kind == "aplaymidi" and self.executable and self.port:
             return [self.executable, "-p", self.port, str(midi_path)]
         raise PlaybackError("MIDI backend is not configured")
@@ -307,7 +312,11 @@ def _detect_backend() -> _Backend:
 
     timidity = shutil.which("timidity")
     if timidity:
-        return _Backend(kind="timidity", executable=timidity)
+        return _Backend(
+            kind="timidity",
+            executable=timidity,
+            timidity_output=os.environ.get("EAR_TRAINER_TIMIDITY_OUTPUT", "default"),
+        )
 
     midi_port = os.environ.get("EAR_TRAINER_MIDI_PORT")
     aplaymidi = shutil.which("aplaymidi")
