@@ -14,6 +14,7 @@ import wave
 
 TICKS_PER_BEAT = 480
 DEFAULT_TEMPO_MICROSECONDS = 500_000
+MIDI_CHANNELS = tuple(channel for channel in range(16) if channel != 9)
 AUDIBILITY_CACHE_VERSION = 1
 AUDIBILITY_SIGNAL_THRESHOLD = 16
 AUDIBILITY_NOTE_DURATION_TICKS = 480
@@ -39,6 +40,7 @@ class MidiNote:
     duration: int
     pitch: int
     velocity: int = 96
+    program: int | None = None
 
 
 class MidiPlayer:
@@ -169,18 +171,38 @@ class _Backend:
 
 
 def build_midi(program: int, notes: list[MidiNote]) -> bytes:
+    default_program = max(0, min(127, program))
+    program_channels: dict[int, int] = {}
+    for note in notes:
+        note_program = (
+            default_program
+            if note.program is None
+            else max(0, min(127, note.program))
+        )
+        if note_program not in program_channels:
+            if len(program_channels) == len(MIDI_CHANNELS):
+                raise ValueError("MIDI playback supports at most 15 instruments")
+            program_channels[note_program] = MIDI_CHANNELS[len(program_channels)]
+
     track = bytearray()
     track += _varlen(0) + b"\xff\x51\x03" + DEFAULT_TEMPO_MICROSECONDS.to_bytes(3, "big")
-    track += _varlen(0) + bytes([0xC0, max(0, min(127, program))])
+    for note_program, channel in program_channels.items():
+        track += _varlen(0) + bytes([0xC0 | channel, note_program])
 
     events: list[tuple[int, int, bytes]] = []
     for note in notes:
+        note_program = (
+            default_program
+            if note.program is None
+            else max(0, min(127, note.program))
+        )
+        channel = program_channels[note_program]
         pitch = max(0, min(127, note.pitch))
         velocity = max(1, min(127, note.velocity))
         start = max(0, note.start)
         end = max(start + 1, start + note.duration)
-        events.append((start, 1, bytes([0x90, pitch, velocity])))
-        events.append((end, 0, bytes([0x80, pitch, 0])))
+        events.append((start, 1, bytes([0x90 | channel, pitch, velocity])))
+        events.append((end, 0, bytes([0x80 | channel, pitch, 0])))
 
     last_tick = 0
     for tick, _order, payload in sorted(events, key=lambda item: (item[0], item[1])):

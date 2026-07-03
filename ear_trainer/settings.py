@@ -50,6 +50,10 @@ class SettingsStore:
             return raw_value
         return default
 
+    def boolean_option(self, section: str, key: str, default: bool) -> bool:
+        raw_value = self._section_data(section).get(key)
+        return raw_value if isinstance(raw_value, bool) else default
+
     def save_selected_names(self, section: str, selected_names: list[str]) -> None:
         self.save_section(section, {"selected": selected_names})
 

@@ -34,7 +34,7 @@ TAB_PROGRESSIONS = "progressions"
 AVAILABLE_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES, TAB_PROGRESSIONS)
 DEFAULT_ENABLED_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES)
 T = TypeVar("T")
-ChallengeSignature = tuple[int, tuple[tuple[int, int, int, int], ...]]
+ChallengeSignature = tuple[int, tuple[tuple[int, int, int, int, int], ...]]
 MAX_DISTINCT_CHALLENGE_ATTEMPTS = 50
 
 TIMBRE_COLUMNS = 6
@@ -593,7 +593,7 @@ class BaseTrainerTab(ttk.Frame):
         except OSError as exc:
             self.status_var.set(f"Could not save settings: {exc}")
 
-    def _extra_settings_payload(self) -> dict[str, str | list[str]]:
+    def _extra_settings_payload(self) -> dict[str, str | bool | list[str]]:
         return {}
 
     def _active_definitions(self) -> list[MusicDefinition]:
@@ -737,6 +737,7 @@ class BaseTrainerTab(ttk.Frame):
                     note.duration,
                     note.pitch,
                     note.velocity,
+                    -1 if note.program is None else note.program,
                 )
                 for note in challenge.notes
             )
@@ -1042,6 +1043,10 @@ class IntervalTrainerTab(BaseTrainerTab):
             mode: tk.BooleanVar(master=parent, value=mode in selected_modes)
             for mode in INTERVAL_MODES
         }
+        self.mix_instruments_var = tk.BooleanVar(
+            master=parent,
+            value=settings.boolean_option("intervals", "mix_instruments", False),
+        )
         super().__init__(
             parent,
             player,
@@ -1068,6 +1073,14 @@ class IntervalTrainerTab(BaseTrainerTab):
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
         self._build_instrument_selector(timbre_frame)
+        mix_row = (len(self.instrument_names) + TIMBRE_COLUMNS - 1) // TIMBRE_COLUMNS
+        mix_checkbutton = ttk.Checkbutton(
+            timbre_frame,
+            text="Mix",
+            variable=self.mix_instruments_var,
+        )
+        mix_checkbutton.grid(row=mix_row, column=0, padx=4, pady=(6, 0), sticky="w")
+        self.selection_controls.append(mix_checkbutton)
 
         mode_frame = ttk.LabelFrame(header, text="Mode", padding=8)
         mode_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
@@ -1094,9 +1107,16 @@ class IntervalTrainerTab(BaseTrainerTab):
         super()._bind_selection_persistence()
         for variable in self.interval_mode_vars.values():
             variable.trace_add("write", lambda *_args: self._queue_settings_save())
+        self.mix_instruments_var.trace_add(
+            "write",
+            lambda *_args: self._queue_settings_save(),
+        )
 
-    def _extra_settings_payload(self) -> dict[str, str | list[str]]:
-        return {"modes": self._active_interval_modes()}
+    def _extra_settings_payload(self) -> dict[str, str | bool | list[str]]:
+        return {
+            "modes": self._active_interval_modes(),
+            "mix_instruments": self.mix_instruments_var.get(),
+        }
 
     def _active_interval_modes(self) -> list[str]:
         return [mode for mode in INTERVAL_MODES if self.interval_mode_vars[mode].get()]
@@ -1112,30 +1132,77 @@ class IntervalTrainerTab(BaseTrainerTab):
 
         timing = self._duration_profile()
         active_definitions = self._active_definitions()
-        offsets = [0]
-        if mode == "Descending":
-            offsets.extend(
-                -active_definition.semitones[0] for active_definition in active_definitions
+        intervals = [
+            active_definition.semitones[0] for active_definition in active_definitions
+        ]
+        if self.mix_instruments_var.get():
+            low_instrument, high_instrument, root = (
+                self._choose_interval_instruments_and_root(intervals, mode)
             )
         else:
-            offsets.extend(
-                active_definition.semitones[0] for active_definition in active_definitions
-            )
-        instrument, root = self._choose_instrument_and_root(offsets)
+            direction = -1 if mode == "Descending" else 1
+            offsets = [0, *(direction * interval for interval in intervals)]
+            instrument, root = self._choose_instrument_and_root(offsets)
+            low_instrument = high_instrument = instrument
         answer_notes = {
             active_definition.name: self._build_interval_notes(
                 interval=active_definition.semitones[0],
                 mode=mode,
                 root=root,
                 timing=timing,
+                low_program=low_instrument.program,
+                high_program=high_instrument.program,
             )
             for active_definition in active_definitions
         }
         return Challenge(
             answer=definition.name,
-            program=instrument.program,
+            program=low_instrument.program,
             notes=answer_notes[definition.name],
             answer_notes=answer_notes,
+        )
+
+    def _choose_interval_instruments_and_root(
+        self,
+        intervals: Iterable[int],
+        mode: str,
+    ) -> tuple[InstrumentDefinition, InstrumentDefinition, int]:
+        instruments = self._active_instruments()
+        interval_values = tuple(abs(interval) for interval in intervals) or (0,)
+        distinct_pairs = [
+            (low_instrument, high_instrument)
+            for low_instrument in instruments
+            for high_instrument in instruments
+            if low_instrument != high_instrument
+        ]
+        same_pairs = [(instrument, instrument) for instrument in instruments]
+        random.shuffle(distinct_pairs)
+        random.shuffle(same_pairs)
+
+        for low_instrument, high_instrument in [*distinct_pairs, *same_pairs]:
+            low_pitches = self._playable_pitches_for_instrument(low_instrument)
+            high_pitches = self._playable_pitches_for_instrument(high_instrument)
+            if mode == "Descending":
+                candidates = [
+                    root
+                    for root in high_pitches
+                    if all(root - interval in low_pitches for interval in interval_values)
+                ]
+            else:
+                candidates = [
+                    root
+                    for root in low_pitches
+                    if all(root + interval in high_pitches for interval in interval_values)
+                ]
+            if not candidates:
+                continue
+
+            pitch_class = random.choice(sorted({root % 12 for root in candidates}))
+            roots = [root for root in candidates if root % 12 == pitch_class]
+            return low_instrument, high_instrument, random.choice(roots)
+
+        raise NoPlayableRangeError(
+            "No selected instrument pair can play every note in the current selection"
         )
 
     def _build_interval_notes(
@@ -1144,31 +1211,57 @@ class IntervalTrainerTab(BaseTrainerTab):
         mode: str,
         root: int,
         timing: dict[str, int],
+        low_program: int,
+        high_program: int,
     ) -> list[MidiNote]:
         if mode == "Ascending":
             return [
-                MidiNote(start=0, duration=timing["melodic_note"], pitch=root),
+                MidiNote(
+                    start=0,
+                    duration=timing["melodic_note"],
+                    pitch=root,
+                    program=low_program,
+                ),
                 MidiNote(
                     start=timing["melodic_step"],
                     duration=timing["melodic_note"],
                     pitch=root + interval,
+                    program=high_program,
                 ),
             ]
         if mode == "Descending":
             return [
-                MidiNote(start=0, duration=timing["melodic_note"], pitch=root),
+                MidiNote(
+                    start=0,
+                    duration=timing["melodic_note"],
+                    pitch=root,
+                    program=high_program,
+                ),
                 MidiNote(
                     start=timing["melodic_step"],
                     duration=timing["melodic_note"],
                     pitch=root - interval,
+                    program=low_program,
                 ),
             ]
 
-        notes = [MidiNote(start=0, duration=timing["simultaneous_note"], pitch=root)]
+        notes = [
+            MidiNote(
+                start=0,
+                duration=timing["simultaneous_note"],
+                pitch=root,
+                program=low_program,
+            )
+        ]
         target = root + interval
         if target != root:
             notes.append(
-                MidiNote(start=0, duration=timing["simultaneous_note"], pitch=target)
+                MidiNote(
+                    start=0,
+                    duration=timing["simultaneous_note"],
+                    pitch=target,
+                    program=high_program,
+                )
             )
         return notes
 
@@ -1202,6 +1295,10 @@ class HarmonyTrainerTab(BaseTrainerTab):
             mode: tk.BooleanVar(master=parent, value=mode in selected_modes)
             for mode in INTERVAL_MODES
         }
+        self.mix_instruments_var = tk.BooleanVar(
+            master=parent,
+            value=settings.boolean_option("harmonies", "mix_instruments", False),
+        )
         inversion_labels = [label for label, _degree in HARMONY_INVERSION_OPTIONS]
         selected_inversions = settings.selected_values(
             "harmonies",
@@ -1242,6 +1339,14 @@ class HarmonyTrainerTab(BaseTrainerTab):
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
         timbre_frame.grid(row=0, column=1, sticky="e")
         self._build_instrument_selector(timbre_frame)
+        mix_row = (len(self.instrument_names) + TIMBRE_COLUMNS - 1) // TIMBRE_COLUMNS
+        mix_checkbutton = ttk.Checkbutton(
+            timbre_frame,
+            text="Mix",
+            variable=self.mix_instruments_var,
+        )
+        mix_checkbutton.grid(row=mix_row, column=0, padx=4, pady=(6, 0), sticky="w")
+        self.selection_controls.append(mix_checkbutton)
 
         mode_frame = ttk.LabelFrame(header, text="Mode", padding=8)
         mode_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
@@ -1306,8 +1411,12 @@ class HarmonyTrainerTab(BaseTrainerTab):
                 "write",
                 lambda *_args: self._queue_settings_save(),
             )
+        self.mix_instruments_var.trace_add(
+            "write",
+            lambda *_args: self._queue_settings_save(),
+        )
 
-    def _extra_settings_payload(self) -> dict[str, str | list[str]]:
+    def _extra_settings_payload(self) -> dict[str, str | bool | list[str]]:
         selected_inversions = [
             label
             for label, _degree in HARMONY_INVERSION_OPTIONS
@@ -1316,6 +1425,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         return {
             "modes": self._active_harmony_modes(),
             "inversions": selected_inversions,
+            "mix_instruments": self.mix_instruments_var.get(),
         }
 
     def _active_harmony_modes(self) -> list[str]:
@@ -1352,9 +1462,18 @@ class HarmonyTrainerTab(BaseTrainerTab):
     def _build_challenge(self, definition: MusicDefinition) -> Challenge:
         timing = self._duration_profile()
         active_definitions = self._active_definitions()
-        instrument, root = self._choose_instrument_and_root(
-            self._harmony_answer_offsets(active_definitions)
-        )
+        if self.mix_instruments_var.get():
+            voice_instruments, root = self._choose_harmony_instruments_and_root(
+                active_definitions
+            )
+            program = voice_instruments[0].program
+            voice_programs = [instrument.program for instrument in voice_instruments]
+        else:
+            instrument, root = self._choose_instrument_and_root(
+                self._harmony_answer_offsets(active_definitions)
+            )
+            program = instrument.program
+            voice_programs = None
         inversion = self._choose_inversion(definition)
         mode = self._actual_harmony_mode()
         answer_notes = self._build_harmony_answer_notes(
@@ -1362,14 +1481,75 @@ class HarmonyTrainerTab(BaseTrainerTab):
             timing=timing,
             mode=mode,
             active_definitions=active_definitions,
+            voice_programs=voice_programs,
         )
         answer = self._answer_name(definition, inversion)
         return Challenge(
             answer=answer,
-            program=instrument.program,
+            program=program,
             notes=answer_notes[answer],
             answer_notes=answer_notes,
         )
+
+    def _choose_harmony_instruments_and_root(
+        self,
+        active_definitions: list[MusicDefinition],
+    ) -> tuple[list[InstrumentDefinition], int]:
+        offset_sets = [
+            self._apply_inversion(definition.semitones, inversion)
+            for definition in active_definitions
+            for inversion in self._active_inversions(len(definition.semitones))
+        ]
+        voice_count = max((len(offsets) for offsets in offset_sets), default=0)
+        if voice_count == 0:
+            raise NoPlayableRangeError("No selected harmony has playable voices")
+
+        offsets_by_voice = [
+            {
+                offsets[voice_index]
+                for offsets in offset_sets
+                if voice_index < len(offsets)
+            }
+            for voice_index in range(voice_count)
+        ]
+        instruments = self._active_instruments()
+        playable_by_instrument = {
+            instrument.name: self._playable_pitches_for_instrument(instrument)
+            for instrument in instruments
+        }
+        candidates: list[tuple[int, list[list[InstrumentDefinition]]]] = []
+        for root in range(128):
+            eligible_by_voice = [
+                [
+                    instrument
+                    for instrument in instruments
+                    if all(
+                        root + offset in playable_by_instrument[instrument.name]
+                        for offset in voice_offsets
+                    )
+                ]
+                for voice_offsets in offsets_by_voice
+            ]
+            if all(eligible_by_voice):
+                candidates.append((root, eligible_by_voice))
+
+        if not candidates:
+            raise NoPlayableRangeError(
+                "No selected instrument mix can play every note in the current selection"
+            )
+
+        pitch_class = random.choice(sorted({root % 12 for root, _options in candidates}))
+        root, eligible_by_voice = random.choice(
+            [candidate for candidate in candidates if candidate[0] % 12 == pitch_class]
+        )
+        voice_instruments: list[InstrumentDefinition] = []
+        used_names: set[str] = set()
+        for eligible in eligible_by_voice:
+            unused = [instrument for instrument in eligible if instrument.name not in used_names]
+            instrument = random.choice(unused or eligible)
+            voice_instruments.append(instrument)
+            used_names.add(instrument.name)
+        return voice_instruments, root
 
     def _actual_harmony_mode(self) -> str:
         return random.choice(self._active_harmony_modes())
@@ -1399,6 +1579,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         timing: dict[str, int],
         mode: str,
         active_definitions: list[MusicDefinition] | None = None,
+        voice_programs: list[int] | None = None,
     ) -> dict[str, list[MidiNote]]:
         answer_notes: dict[str, list[MidiNote]] = {}
         for definition in active_definitions or self._active_definitions():
@@ -1410,6 +1591,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
                     semitones=semitones,
                     timing=timing,
                     mode=mode,
+                    voice_programs=voice_programs,
                 )
         return answer_notes
 
@@ -1429,12 +1611,17 @@ class HarmonyTrainerTab(BaseTrainerTab):
         semitones: tuple[int, ...],
         timing: dict[str, int],
         mode: str | None = None,
+        voice_programs: list[int] | None = None,
     ) -> list[MidiNote]:
         mode = mode or self._actual_harmony_mode()
-
-        ordered_semitones = (
-            tuple(reversed(semitones)) if mode == "Descending" else semitones
+        programs: list[int | None] = (
+            [*voice_programs[: len(semitones)]]
+            if voice_programs is not None
+            else [None] * len(semitones)
         )
+        voices = list(zip(semitones, programs))
+        if mode == "Descending":
+            voices.reverse()
         if mode == "Harmonic":
             return [
                 MidiNote(
@@ -1442,8 +1629,9 @@ class HarmonyTrainerTab(BaseTrainerTab):
                     duration=timing["harmony_chord"],
                     pitch=root + semitone,
                     velocity=84,
+                    program=program,
                 )
-                for semitone in ordered_semitones
+                for semitone, program in voices
             ]
 
         return [
@@ -1452,8 +1640,9 @@ class HarmonyTrainerTab(BaseTrainerTab):
                 duration=timing["melodic_note"],
                 pitch=root + semitone,
                 velocity=84,
+                program=program,
             )
-            for index, semitone in enumerate(ordered_semitones)
+            for index, (semitone, program) in enumerate(voices)
         ]
 
     def _apply_inversion(self, semitones: tuple[int, ...], inversion: int) -> tuple[int, ...]:

@@ -99,10 +99,11 @@ instruments:
   Flute: [73, 60, 108]
 ```
 
-The format is `[program, low_note, high_note]`. The app randomizes playback
-among the instruments selected in the current tab, then picks roots that keep
-the current interval, chord, inversion, or progression inside that instrument
-range.
+The format is `[program, low_note, high_note]`. With `Mix` enabled, interval and
+harmony exercises randomly assign selected instruments to individual notes,
+then pick roots that keep each note inside its instrument range. Without `Mix`,
+and for progression exercises, one selected instrument is used for the complete
+exercise.
 
 When the MIDI backend supports offline rendering, the app checks which pitches
 actually produce audio for each configured instrument and stores that result in
