@@ -198,6 +198,8 @@ class EarTrainerApp(tk.Tk):
         )
         notebook.select(active_tab)
         notebook.bind("<<NotebookTabChanged>>", self._save_active_tab)
+        self.bind("<F7>", self._replay_active_tab)
+        self.bind("<F8>", self._next_active_tab)
 
     def _enabled_tab_keys(self) -> tuple[str, ...]:
         enabled_from_env = os.environ.get(ENABLED_TABS_ENV_VAR)
@@ -231,6 +233,25 @@ class EarTrainerApp(tk.Tk):
         active_tab_key = self.tab_keys.get(active_tab)
         if active_tab_key is not None:
             self.settings.save_section("ui", {"active_tab": active_tab_key})
+
+    def _active_trainer_tab(self) -> BaseTrainerTab | None:
+        active_tab_name = self.notebook.select()
+        return next(
+            (tab for tab in self.trainer_tabs if str(tab) == active_tab_name),
+            None,
+        )
+
+    def _replay_active_tab(self, _event: tk.Event[tk.Misc]) -> str:
+        active_tab = self._active_trainer_tab()
+        if active_tab is not None:
+            active_tab.invoke_replay()
+        return "break"
+
+    def _next_active_tab(self, _event: tk.Event[tk.Misc]) -> str:
+        active_tab = self._active_trainer_tab()
+        if active_tab is not None:
+            active_tab.invoke_next()
+        return "break"
 
 
 class BaseTrainerTab(ttk.Frame):
@@ -491,14 +512,14 @@ class BaseTrainerTab(ttk.Frame):
         self.start_button.grid(row=0, column=0, padx=(0, 6))
         self.replay_button = ttk.Button(
             footer,
-            text="Replay",
+            text="Replay (F7)",
             command=self._replay_current,
             state=tk.DISABLED,
         )
         self.replay_button.grid(row=0, column=1, padx=(0, 6))
         self.next_button = ttk.Button(
             footer,
-            text="Next",
+            text="Next (F8)",
             command=self._next_challenge,
             state=tk.DISABLED,
         )
@@ -637,6 +658,12 @@ class BaseTrainerTab(ttk.Frame):
             self.stop_training()
         else:
             self._start()
+
+    def invoke_replay(self) -> None:
+        self.replay_button.invoke()
+
+    def invoke_next(self) -> None:
+        self.next_button.invoke()
 
     def _start(self) -> None:
         if not self._active_definitions():
