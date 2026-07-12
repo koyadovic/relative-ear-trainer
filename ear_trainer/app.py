@@ -778,18 +778,13 @@ class BaseTrainerTab(ttk.Frame):
         return self._answer_challenge_count(definition.name)
 
     def _initial_challenge_counts(self) -> dict[str, int]:
-        return {
-            answer: int(self.answer_stats.get(answer, {}).get("attempts", 0))
-            for answer in self._active_balance_answer_names()
-        }
+        return {answer: 0 for answer in self._active_balance_answer_names()}
 
     def _active_balance_answer_names(self) -> list[str]:
         return [definition.name for definition in self._active_definitions()]
 
     def _answer_challenge_count(self, answer: str) -> int:
-        if self.challenge_counts:
-            return self.challenge_counts.get(answer, 0)
-        return int(self.answer_stats.get(answer, {}).get("attempts", 0))
+        return self.challenge_counts.get(answer, 0)
 
     def _record_challenge(self, answer: str) -> None:
         self.challenge_counts[answer] = self._answer_challenge_count(answer) + 1
