@@ -114,6 +114,31 @@ def load_harmony_definitions(path: Path) -> tuple[MusicDefinition, ...]:
     return tuple(definitions)
 
 
+def load_scale_definitions(path: Path) -> tuple[MusicDefinition, ...]:
+    data = load_yaml_file(path)
+    section = data.get("scales", data)
+    definitions: list[MusicDefinition] = []
+
+    for name, value in _iter_definition_entries(section):
+        tokens = _coerce_formula_tokens(value, default=None)
+        semitones = _dedupe_preserving_order(degree_to_semitones(token) for token in tokens)
+        if len(semitones) != 7:
+            raise ConfigError(f"Scale {name!r} must contain seven different degrees")
+        if semitones[0] != 0 or any(
+            later <= earlier for earlier, later in zip(semitones, semitones[1:])
+        ):
+            raise ConfigError(
+                f"Scale {name!r} must start on 1 and ascend within one octave"
+            )
+        if semitones[-1] >= 12:
+            raise ConfigError(f"Scale {name!r} must stay within one octave")
+        definitions.append(MusicDefinition(name=name, semitones=semitones, formula=tokens))
+
+    if not definitions:
+        raise ConfigError(f"No scale definitions found in {path}")
+    return tuple(definitions)
+
+
 def load_progression_definitions(
     path: Path,
     harmony_definitions: tuple[MusicDefinition, ...],

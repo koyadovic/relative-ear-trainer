@@ -18,6 +18,7 @@ from .music import (
     load_harmony_definitions,
     load_interval_definitions,
     load_progression_definitions,
+    load_scale_definitions,
 )
 from .settings import SettingsStore
 
@@ -26,13 +27,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INTERVALS_PATH = PROJECT_ROOT / "config" / "intervals.yaml"
 HARMONIES_PATH = PROJECT_ROOT / "config" / "harmonies.yaml"
 PROGRESSIONS_PATH = PROJECT_ROOT / "config" / "progressions.yaml"
+SCALES_PATH = PROJECT_ROOT / "config" / "scales.yaml"
 INSTRUMENTS_PATH = PROJECT_ROOT / "config" / "instruments.yaml"
 ENABLED_TABS_ENV_VAR = "EAR_TRAINER_TABS"
 TAB_INTERVALS = "intervals"
+TAB_TENSIONS = "tensions"
 TAB_HARMONIES = "harmonies"
 TAB_PROGRESSIONS = "progressions"
-AVAILABLE_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES, TAB_PROGRESSIONS)
-DEFAULT_ENABLED_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES)
+AVAILABLE_TAB_KEYS = (TAB_INTERVALS, TAB_TENSIONS, TAB_HARMONIES, TAB_PROGRESSIONS)
+DEFAULT_ENABLED_TAB_KEYS = (TAB_INTERVALS, TAB_TENSIONS, TAB_HARMONIES)
 T = TypeVar("T")
 ChallengeSignature = tuple[int, tuple[tuple[int, int, int, int, int], ...]]
 MAX_DISTINCT_CHALLENGE_ATTEMPTS = 50
@@ -40,6 +43,36 @@ MAX_DISTINCT_CHALLENGE_ATTEMPTS = 50
 TIMBRE_COLUMNS = 6
 RANDOM_LABEL = "Random"
 INTERVAL_MODES = ("Ascending", "Descending", "Harmonic")
+TENSION_ANSWERS = (
+    "1",
+    "b2",
+    "2",
+    "b3",
+    "3",
+    "4",
+    "b5",
+    "5",
+    "b6",
+    "6",
+    "b7",
+    "7",
+)
+TENSION_HARMONY_TYPES = ("Thirds", "Fourths")
+TENSION_HARMONY_DEGREE_STEPS = {"Thirds": 2, "Fourths": 3}
+TENSION_HARMONY_NOTE_COUNTS = ("2", "3", "4")
+TENSION_MELODY_MOTIONS = ("Conjunct", "Disjunct")
+TENSION_NOTE_COUNTS = ("3", "4", "5")
+TENSION_BASS_INSTRUMENT = InstrumentDefinition(
+    name="Fingered Bass",
+    program=33,
+    low_note=28,
+    high_note=67,
+)
+TENSION_REGISTER_OPTIONS = (
+    "Harmony Low / Melody High",
+    "Harmony High / Melody Low",
+    "Overlap",
+)
 PLAYABLE_PITCH_EDGE_MARGIN = 12
 DURATION_LABELS = ("Short", "Medium", "Long")
 DEFAULT_DURATION_LABEL = "Medium"
@@ -57,6 +90,10 @@ DURATION_PROFILES = {
         "harmony_chord": 1280,
         "progression_chord": 760,
         "progression_step": 920,
+        "tension_bass_lead_in": 420,
+        "tension_lead_in": 620,
+        "tension_note": 360,
+        "tension_step": 440,
     },
     "Medium": {
         "melodic_note": 620,
@@ -65,6 +102,10 @@ DURATION_PROFILES = {
         "harmony_chord": 1700,
         "progression_chord": 1100,
         "progression_step": 1280,
+        "tension_bass_lead_in": 620,
+        "tension_lead_in": 960,
+        "tension_note": 520,
+        "tension_step": 640,
     },
     "Long": {
         "melodic_note": 900,
@@ -73,6 +114,10 @@ DURATION_PROFILES = {
         "harmony_chord": 2400,
         "progression_chord": 1600,
         "progression_step": 1850,
+        "tension_bass_lead_in": 900,
+        "tension_lead_in": 1360,
+        "tension_note": 760,
+        "tension_step": 900,
     },
 }
 
@@ -88,10 +133,51 @@ def _weighted_choice_by_count(items: list[T], count_for: Callable[[T], int]) -> 
     return random.choices(items, weights=weights, k=1)[0]
 
 
+def _choose_distinct_voice_instruments(
+    eligible_by_voice: list[list[InstrumentDefinition]],
+) -> list[InstrumentDefinition] | None:
+    available_names = {
+        instrument.name
+        for options in eligible_by_voice
+        for instrument in options
+    }
+    if len(available_names) < len(eligible_by_voice):
+        return None
+
+    assignments: list[InstrumentDefinition | None] = [None] * len(eligible_by_voice)
+    voice_order = sorted(
+        range(len(eligible_by_voice)),
+        key=lambda voice_index: len(eligible_by_voice[voice_index]),
+    )
+
+    def assign(position: int, used_names: set[str]) -> bool:
+        if position == len(voice_order):
+            return True
+        voice_index = voice_order[position]
+        options = [*eligible_by_voice[voice_index]]
+        random.shuffle(options)
+        for instrument in options:
+            if instrument.name in used_names:
+                continue
+            assignments[voice_index] = instrument
+            if assign(position + 1, {*used_names, instrument.name}):
+                return True
+            assignments[voice_index] = None
+        return False
+
+    if not assign(0, set()):
+        return None
+    return [instrument for instrument in assignments if instrument is not None]
+
+
 def _parse_enabled_tab_keys(raw_value: str) -> set[str]:
     aliases = {
         "interval": TAB_INTERVALS,
         "intervals": TAB_INTERVALS,
+        "tension": TAB_TENSIONS,
+        "tensions": TAB_TENSIONS,
+        "scale_tensions": TAB_TENSIONS,
+        "scale-tensions": TAB_TENSIONS,
         "harmony": TAB_HARMONIES,
         "harmonies": TAB_HARMONIES,
         "progression": TAB_PROGRESSIONS,
@@ -117,6 +203,8 @@ class Challenge:
     program: int
     notes: list[MidiNote]
     answer_notes: dict[str, list[MidiNote]]
+    answer_sequence: tuple[str, ...] = ()
+    balance_keys: tuple[str, ...] = ()
 
 
 class EarTrainerApp(tk.Tk):
@@ -128,6 +216,7 @@ class EarTrainerApp(tk.Tk):
         try:
             instrument_definitions = load_instrument_definitions(INSTRUMENTS_PATH)
             interval_definitions = load_interval_definitions(INTERVALS_PATH)
+            scale_definitions = load_scale_definitions(SCALES_PATH)
             harmony_definitions = load_harmony_definitions(HARMONIES_PATH)
             progression_definitions = load_progression_definitions(
                 PROGRESSIONS_PATH,
@@ -162,6 +251,14 @@ class EarTrainerApp(tk.Tk):
             harmony_definitions,
             self._stop_other_tabs,
         )
+        tension_tab = ScaleTensionTrainerTab(
+            notebook,
+            self.player,
+            self.settings,
+            instrument_definitions,
+            scale_definitions,
+            self._stop_other_tabs,
+        )
         progression_tab = ProgressionTrainerTab(
             notebook,
             self.player,
@@ -172,6 +269,7 @@ class EarTrainerApp(tk.Tk):
         )
         available_tabs = {
             TAB_INTERVALS: (interval_tab, "Intervals"),
+            TAB_TENSIONS: (tension_tab, "Scale Tensions"),
             TAB_HARMONIES: (harmony_tab, "Harmonies"),
             TAB_PROGRESSIONS: (progression_tab, "Harmonic Functions"),
         }
@@ -1288,6 +1386,804 @@ class IntervalTrainerTab(BaseTrainerTab):
         return notes
 
 
+class ScaleTensionTrainerTab(BaseTrainerTab):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        player: MidiPlayer,
+        settings: SettingsStore,
+        instruments: tuple[InstrumentDefinition, ...],
+        scales: tuple[MusicDefinition, ...],
+        on_start: Callable[[BaseTrainerTab], None] | None,
+    ) -> None:
+        self.scales = scales
+        scale_names = [scale.name for scale in scales]
+        selected_scales = settings.selected_values("tensions", "scales", scale_names)
+        if selected_scales is None:
+            selected_scales = set(scale_names)
+        self.scale_vars = {
+            name: tk.BooleanVar(master=parent, value=name in selected_scales)
+            for name in scale_names
+        }
+
+        selected_harmony_types = settings.selected_values(
+            "tensions",
+            "harmony_types",
+            list(TENSION_HARMONY_TYPES),
+        )
+        if selected_harmony_types is None:
+            selected_harmony_types = {TENSION_HARMONY_TYPES[0]}
+        self.harmony_type_vars = {
+            name: tk.BooleanVar(master=parent, value=name in selected_harmony_types)
+            for name in TENSION_HARMONY_TYPES
+        }
+
+        selected_harmony_note_counts = settings.selected_values(
+            "tensions",
+            "harmony_note_counts",
+            list(TENSION_HARMONY_NOTE_COUNTS),
+        )
+        if selected_harmony_note_counts is None:
+            selected_harmony_note_counts = {TENSION_HARMONY_NOTE_COUNTS[0]}
+        self.harmony_note_count_vars = {
+            count: tk.BooleanVar(
+                master=parent,
+                value=count in selected_harmony_note_counts,
+            )
+            for count in TENSION_HARMONY_NOTE_COUNTS
+        }
+
+        selected_motions = settings.selected_values(
+            "tensions",
+            "melody_motions",
+            list(TENSION_MELODY_MOTIONS),
+        )
+        if selected_motions is None:
+            selected_motions = {TENSION_MELODY_MOTIONS[0]}
+        self.melody_motion_vars = {
+            name: tk.BooleanVar(master=parent, value=name in selected_motions)
+            for name in TENSION_MELODY_MOTIONS
+        }
+
+        selected_note_counts = settings.selected_values(
+            "tensions",
+            "note_counts",
+            list(TENSION_NOTE_COUNTS),
+        )
+        if selected_note_counts is None:
+            selected_note_counts = {TENSION_NOTE_COUNTS[0]}
+        self.note_count_vars = {
+            count: tk.BooleanVar(master=parent, value=count in selected_note_counts)
+            for count in TENSION_NOTE_COUNTS
+        }
+        self.register_var = tk.StringVar(
+            master=parent,
+            value=settings.option(
+                "tensions",
+                "register",
+                list(TENSION_REGISTER_OPTIONS),
+                TENSION_REGISTER_OPTIONS[0],
+            ),
+        )
+        self.mix_harmony_instruments_var = tk.BooleanVar(
+            master=parent,
+            value=settings.boolean_option(
+                "tensions",
+                "mix_harmony_instruments",
+                False,
+            ),
+        )
+        self.selected_tensions: list[str] = []
+        self.answer_progress_var = tk.StringVar(master=parent, value="Your answer: -")
+        self.answer_edit_buttons: list[ttk.Button] = []
+        placeholder = MusicDefinition(
+            name="Scale tension sequence",
+            semitones=(0,),
+            formula=("1",),
+        )
+        super().__init__(
+            parent,
+            player,
+            settings,
+            "tensions",
+            instruments,
+            (placeholder,),
+            title="Scale tension training",
+            on_start=on_start,
+        )
+
+    def _build_header(self) -> None:
+        header = ttk.Frame(self)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        header.columnconfigure(1, weight=1)
+
+        ttk.Label(header, text=self.title, style="Header.TLabel").grid(
+            row=0,
+            column=0,
+            rowspan=4,
+            sticky="nw",
+            padx=(0, 10),
+        )
+        options = ttk.Frame(header)
+        options.grid(row=0, column=1, sticky="e")
+
+        timbre_frame = ttk.LabelFrame(options, text="Instrument", padding=8)
+        timbre_frame.grid(row=0, column=0, columnspan=4, sticky="e")
+        self._build_instrument_selector(timbre_frame)
+        mix_row = (len(self.instrument_names) + TIMBRE_COLUMNS - 1) // TIMBRE_COLUMNS
+        mix_checkbutton = ttk.Checkbutton(
+            timbre_frame,
+            text="Mix harmony voices",
+            variable=self.mix_harmony_instruments_var,
+        )
+        mix_checkbutton.grid(
+            row=mix_row,
+            column=0,
+            columnspan=2,
+            padx=4,
+            pady=(6, 0),
+            sticky="w",
+        )
+        self.selection_controls.append(mix_checkbutton)
+
+        scale_frame = ttk.LabelFrame(options, text="Scales", padding=8)
+        scale_frame.grid(row=1, column=0, columnspan=3, sticky="e", pady=(6, 0))
+        for column, scale in enumerate(self.scales):
+            checkbutton = ttk.Checkbutton(
+                scale_frame,
+                text=scale.name,
+                variable=self.scale_vars[scale.name],
+            )
+            checkbutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(checkbutton)
+
+        duration_frame = ttk.LabelFrame(options, text="Duration", padding=8)
+        duration_frame.grid(row=1, column=3, sticky="e", padx=(6, 0), pady=(6, 0))
+        for column, label in enumerate(DURATION_LABELS):
+            radiobutton = ttk.Radiobutton(
+                duration_frame,
+                text=label,
+                value=label,
+                variable=self.duration_var,
+            )
+            radiobutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(radiobutton)
+
+        harmony_frame = ttk.LabelFrame(options, text="Harmony", padding=8)
+        harmony_frame.grid(row=2, column=0, sticky="e", pady=(6, 0))
+        for column, label in enumerate(TENSION_HARMONY_TYPES):
+            checkbutton = ttk.Checkbutton(
+                harmony_frame,
+                text=label,
+                variable=self.harmony_type_vars[label],
+            )
+            checkbutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(checkbutton)
+
+        harmony_count_frame = ttk.LabelFrame(options, text="Harmony notes", padding=8)
+        harmony_count_frame.grid(
+            row=2,
+            column=1,
+            sticky="e",
+            padx=(6, 0),
+            pady=(6, 0),
+        )
+        for column, count in enumerate(TENSION_HARMONY_NOTE_COUNTS):
+            checkbutton = ttk.Checkbutton(
+                harmony_count_frame,
+                text=count,
+                variable=self.harmony_note_count_vars[count],
+            )
+            checkbutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(checkbutton)
+
+        melody_frame = ttk.LabelFrame(options, text="Melody", padding=8)
+        melody_frame.grid(row=2, column=2, sticky="e", padx=(6, 0), pady=(6, 0))
+        for column, label in enumerate(TENSION_MELODY_MOTIONS):
+            checkbutton = ttk.Checkbutton(
+                melody_frame,
+                text=label,
+                variable=self.melody_motion_vars[label],
+            )
+            checkbutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(checkbutton)
+
+        count_frame = ttk.LabelFrame(options, text="Melody notes", padding=8)
+        count_frame.grid(row=2, column=3, sticky="e", padx=(6, 0), pady=(6, 0))
+        for column, count in enumerate(TENSION_NOTE_COUNTS):
+            checkbutton = ttk.Checkbutton(
+                count_frame,
+                text=count,
+                variable=self.note_count_vars[count],
+            )
+            checkbutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(checkbutton)
+
+        register_frame = ttk.LabelFrame(options, text="Registers", padding=8)
+        register_frame.grid(
+            row=3,
+            column=0,
+            columnspan=4,
+            sticky="e",
+            pady=(6, 0),
+        )
+        for column, label in enumerate(TENSION_REGISTER_OPTIONS):
+            radiobutton = ttk.Radiobutton(
+                register_frame,
+                text=label,
+                value=label,
+                variable=self.register_var,
+            )
+            radiobutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(radiobutton)
+
+    def _build_definition_selector(self) -> None:
+        return
+
+    def _build_answer_area(self) -> None:
+        self.rowconfigure(2, weight=0)
+        self.rowconfigure(1, weight=1)
+        outer = ttk.LabelFrame(self, text="Answer", padding=8)
+        outer.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+        outer.columnconfigure(0, weight=1)
+
+        ttk.Label(outer, textvariable=self.answer_progress_var, style="Result.TLabel").grid(
+            row=0,
+            column=0,
+            sticky="w",
+            pady=(0, 6),
+        )
+        grid_parent = ttk.Frame(outer)
+        grid_parent.grid(row=1, column=0, sticky="new")
+        self.answer_grid_parent = grid_parent
+        for answer in TENSION_ANSWERS:
+            button = ttk.Button(
+                grid_parent,
+                text=answer,
+                command=lambda name=answer: self._answer(name),
+            )
+            self.answer_buttons[answer] = button
+
+        edit_controls = ttk.Frame(outer)
+        edit_controls.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        undo_button = ttk.Button(edit_controls, text="Undo", command=self._undo_tension)
+        undo_button.pack(side=tk.LEFT)
+        clear_button = ttk.Button(
+            edit_controls,
+            text="Clear answer",
+            command=self._clear_tensions,
+        )
+        clear_button.pack(side=tk.LEFT, padx=(6, 0))
+        self.answer_edit_buttons.extend([undo_button, clear_button])
+
+    def _build_controls(self) -> None:
+        footer = ttk.Frame(self)
+        footer.grid(row=2, column=0, sticky="ew")
+        footer.columnconfigure(3, weight=1)
+
+        self.start_button = ttk.Button(footer, text="Start", command=self._toggle_running)
+        self.start_button.grid(row=0, column=0, padx=(0, 6))
+        self.replay_button = ttk.Button(
+            footer,
+            text="Replay (F7)",
+            command=self._replay_current,
+            state=tk.DISABLED,
+        )
+        self.replay_button.grid(row=0, column=1, padx=(0, 6))
+        self.next_button = ttk.Button(
+            footer,
+            text="Next (F8)",
+            command=self._next_challenge,
+            state=tk.DISABLED,
+        )
+        self.next_button.grid(row=0, column=2, padx=(0, 6))
+        ttk.Label(footer, textvariable=self.status_var, style="Result.TLabel").grid(
+            row=0,
+            column=3,
+            sticky="w",
+            padx=(4, 10),
+        )
+        ttk.Label(footer, textvariable=self.score_var).grid(row=0, column=4, sticky="e")
+        ttk.Label(footer, textvariable=self.feedback_var, style="Result.TLabel").grid(
+            row=1,
+            column=0,
+            columnspan=5,
+            sticky="w",
+            pady=(6, 0),
+        )
+
+    def _bind_selection_persistence(self) -> None:
+        super()._bind_selection_persistence()
+        variables = [
+            *self.scale_vars.values(),
+            *self.harmony_type_vars.values(),
+            *self.harmony_note_count_vars.values(),
+            *self.melody_motion_vars.values(),
+            *self.note_count_vars.values(),
+            self.register_var,
+            self.mix_harmony_instruments_var,
+        ]
+        for variable in variables:
+            variable.trace_add("write", lambda *_args: self._queue_settings_save())
+
+    def _extra_settings_payload(self) -> dict[str, str | bool | list[str]]:
+        return {
+            "scales": self._active_scale_names(),
+            "harmony_types": self._active_harmony_types(),
+            "harmony_note_counts": self._active_harmony_note_counts(),
+            "melody_motions": self._active_melody_motions(),
+            "note_counts": self._active_note_counts(),
+            "register": self.register_var.get(),
+            "mix_harmony_instruments": self.mix_harmony_instruments_var.get(),
+        }
+
+    def _active_scale_names(self) -> list[str]:
+        return [scale.name for scale in self.scales if self.scale_vars[scale.name].get()]
+
+    def _active_harmony_types(self) -> list[str]:
+        return [
+            name for name in TENSION_HARMONY_TYPES if self.harmony_type_vars[name].get()
+        ]
+
+    def _active_harmony_note_counts(self) -> list[str]:
+        return [
+            count
+            for count in TENSION_HARMONY_NOTE_COUNTS
+            if self.harmony_note_count_vars[count].get()
+        ]
+
+    def _active_melody_motions(self) -> list[str]:
+        return [
+            name for name in TENSION_MELODY_MOTIONS if self.melody_motion_vars[name].get()
+        ]
+
+    def _active_note_counts(self) -> list[str]:
+        return [count for count in TENSION_NOTE_COUNTS if self.note_count_vars[count].get()]
+
+    def _start(self) -> None:
+        required_groups = (
+            (self._active_scale_names(), "Select at least one scale"),
+            (self._active_harmony_types(), "Select at least one harmony type"),
+            (
+                self._active_harmony_note_counts(),
+                "Select at least one harmony note count",
+            ),
+            (self._active_melody_motions(), "Select at least one melody motion"),
+            (self._active_note_counts(), "Select at least one melody note count"),
+        )
+        for values, error in required_groups:
+            if not values:
+                self.status_var.set(error)
+                return
+        if self.mix_harmony_instruments_var.get():
+            required_instruments = max(map(int, self._active_harmony_note_counts()))
+            if len(self._active_instruments()) < required_instruments:
+                self.status_var.set(
+                    f"Mix needs at least {required_instruments} selected instruments"
+                )
+                return
+        super()._start()
+
+    def stop_training(self) -> None:
+        super().stop_training()
+        self.selected_tensions = []
+        self._update_answer_progress()
+
+    def _next_challenge(self) -> None:
+        self.selected_tensions = []
+        super()._next_challenge()
+        self._update_answer_progress()
+
+    def _sync_answer_buttons_with_selection(self) -> None:
+        for column in range(6):
+            self.answer_grid_parent.columnconfigure(column, weight=1, minsize=80)
+        for index, answer in enumerate(TENSION_ANSWERS):
+            row, column = divmod(index, 6)
+            button = self.answer_buttons[answer]
+            button.configure(text=answer)
+            button.grid(row=row, column=column, sticky="ew", padx=5, pady=4)
+
+    def _answer_button_text(self, answer: str) -> str:
+        return answer
+
+    def _set_answer_buttons_enabled(self, enabled: bool) -> None:
+        super()._set_answer_buttons_enabled(enabled)
+        state = tk.NORMAL if enabled else tk.DISABLED
+        for button in self.answer_edit_buttons:
+            button.configure(state=state)
+
+    def _initial_challenge_counts(self) -> dict[str, int]:
+        option_groups = {
+            "scale": self._active_scale_names(),
+            "harmony": self._active_harmony_types(),
+            "harmony_notes": self._active_harmony_note_counts(),
+            "motion": self._active_melody_motions(),
+            "notes": self._active_note_counts(),
+        }
+        return {
+            f"{category}:{value}": 0
+            for category, values in option_groups.items()
+            for value in values
+        }
+
+    def _record_challenge(self, _answer: str) -> None:
+        if self.current is None:
+            return
+        for key in self.current.balance_keys:
+            self.challenge_counts[key] = self.challenge_counts.get(key, 0) + 1
+
+    def _balanced_option(self, category: str, values: list[str]) -> str:
+        return _weighted_choice_by_count(
+            values,
+            lambda value: self.challenge_counts.get(f"{category}:{value}", 0),
+        )
+
+    def _build_challenge(self, _definition: MusicDefinition) -> Challenge:
+        scales_by_name = {scale.name: scale for scale in self.scales}
+        timing = self._duration_profile()
+        register = self.register_var.get()
+
+        for _attempt in range(160):
+            scale_name = self._balanced_option("scale", self._active_scale_names())
+            harmony_type = self._balanced_option(
+                "harmony",
+                self._active_harmony_types(),
+            )
+            harmony_note_count_label = self._balanced_option(
+                "harmony_notes",
+                self._active_harmony_note_counts(),
+            )
+            harmony_note_count = int(harmony_note_count_label)
+            motion = self._balanced_option("motion", self._active_melody_motions())
+            note_count_label = self._balanced_option("notes", self._active_note_counts())
+            note_count = int(note_count_label)
+            scale = scales_by_name[scale_name]
+            tonic_pitch_class = random.randrange(12)
+            chord_degree = random.randrange(7)
+            harmony_step = TENSION_HARMONY_DEGREE_STEPS[harmony_type]
+            chord_offsets = self._stacked_scale_offsets(
+                scale.semitones,
+                chord_degree,
+                harmony_step,
+                harmony_note_count,
+            )
+            melody_degrees = self._melody_degrees(chord_degree, motion, note_count)
+            chord_root_from_tonic = self._scale_pitch(scale.semitones, chord_degree)
+            melody_offsets = tuple(
+                self._scale_pitch(scale.semitones, degree) - chord_root_from_tonic
+                for degree in melody_degrees
+            )
+            root_pitch_class = (tonic_pitch_class + chord_root_from_tonic) % 12
+            arrangement = self._find_playable_tension_arrangement(
+                root_pitch_class=root_pitch_class,
+                chord_offsets=chord_offsets,
+                melody_offsets=melody_offsets,
+                register=register,
+            )
+            if arrangement is None:
+                continue
+
+            (
+                chord_instruments,
+                melody_instrument,
+                root,
+                bass_pitch,
+                melody_pitches,
+            ) = arrangement
+            chord_pitches = tuple(root + offset for offset in chord_offsets)
+            chord_programs = tuple(instrument.program for instrument in chord_instruments)
+            harmony_pitches = (bass_pitch, *chord_pitches)
+            harmony_programs = (TENSION_BASS_INSTRUMENT.program, *chord_programs)
+            answer_sequence = tuple(
+                TENSION_ANSWERS[offset % 12] for offset in melody_offsets
+            )
+            notes = self._build_scale_tension_notes(
+                harmony_pitches=harmony_pitches,
+                harmony_programs=harmony_programs,
+                melody_pitches=melody_pitches,
+                melody_program=melody_instrument.program,
+                timing=timing,
+            )
+            return Challenge(
+                answer=", ".join(answer_sequence),
+                program=harmony_programs[0],
+                notes=notes,
+                answer_notes={},
+                answer_sequence=answer_sequence,
+                balance_keys=(
+                    f"scale:{scale_name}",
+                    f"harmony:{harmony_type}",
+                    f"harmony_notes:{harmony_note_count_label}",
+                    f"motion:{motion}",
+                    f"notes:{note_count_label}",
+                ),
+            )
+
+        raise NoPlayableRangeError(
+            "No selected instrument combination can play the requested harmony, melody, "
+            "and register layout"
+        )
+
+    @staticmethod
+    def _scale_pitch(scale_semitones: tuple[int, ...], degree: int) -> int:
+        octave, scale_index = divmod(degree, len(scale_semitones))
+        return scale_semitones[scale_index] + (12 * octave)
+
+    def _stacked_scale_offsets(
+        self,
+        scale_semitones: tuple[int, ...],
+        chord_degree: int,
+        degree_step: int,
+        note_count: int,
+    ) -> tuple[int, ...]:
+        root = self._scale_pitch(scale_semitones, chord_degree)
+        return tuple(
+            self._scale_pitch(scale_semitones, chord_degree + (voice * degree_step)) - root
+            for voice in range(note_count)
+        )
+
+    def _melody_degrees(
+        self,
+        chord_degree: int,
+        motion: str,
+        note_count: int,
+    ) -> tuple[int, ...]:
+        current = chord_degree + random.randint(-3, 3)
+        degrees = [current]
+        steps = (-1, 1) if motion == "Conjunct" else (-4, -3, -2, 2, 3, 4)
+        for _index in range(1, note_count):
+            current += random.choice(steps)
+            degrees.append(current)
+        return tuple(degrees)
+
+    def _find_playable_tension_arrangement(
+        self,
+        root_pitch_class: int,
+        chord_offsets: tuple[int, ...],
+        melody_offsets: tuple[int, ...],
+        register: str,
+    ) -> tuple[
+        list[InstrumentDefinition],
+        InstrumentDefinition,
+        int,
+        int,
+        tuple[int, ...],
+    ] | None:
+        instruments = self._active_instruments()
+        playable = {
+            instrument.name: self._playable_pitches_for_instrument(instrument)
+            for instrument in instruments
+        }
+        bass_playable = self._playable_pitches_for_instrument(TENSION_BASS_INSTRUMENT)
+        candidates: list[
+            tuple[
+                int,
+                int,
+                tuple[int, ...],
+                list[InstrumentDefinition],
+                list[InstrumentDefinition],
+            ]
+        ] = []
+        roots = [pitch for pitch in range(128) if pitch % 12 == root_pitch_class]
+        random.shuffle(roots)
+        octave_shifts = list(range(-60, 61, 12))
+        random.shuffle(octave_shifts)
+
+        for root in roots:
+            chord_pitches = tuple(root + offset for offset in chord_offsets)
+            if not all(0 <= pitch <= 127 for pitch in chord_pitches):
+                continue
+
+            for octave_shift in octave_shifts:
+                melody_pitches = tuple(
+                    root + offset + octave_shift for offset in melody_offsets
+                )
+                if not all(0 <= pitch <= 127 for pitch in melody_pitches):
+                    continue
+                if not self._registers_match(chord_pitches, melody_pitches, register):
+                    continue
+                bass_pitch = self._bass_pitch_below_exercise(
+                    root,
+                    chord_pitches,
+                    melody_pitches,
+                )
+                if bass_pitch < 0 or bass_pitch not in bass_playable:
+                    continue
+                eligible_by_voice = [
+                    [
+                        instrument
+                        for instrument in instruments
+                        if pitch in playable[instrument.name]
+                    ]
+                    for pitch in chord_pitches
+                ]
+                if self.mix_harmony_instruments_var.get():
+                    chord_instruments = _choose_distinct_voice_instruments(eligible_by_voice)
+                    if chord_instruments is None:
+                        continue
+                else:
+                    common_instruments = [
+                        instrument
+                        for instrument in instruments
+                        if all(
+                            pitch in playable[instrument.name]
+                            for pitch in chord_pitches
+                        )
+                    ]
+                    if not common_instruments:
+                        continue
+                    instrument = random.choice(common_instruments)
+                    chord_instruments = [instrument] * len(chord_offsets)
+                melody_instruments = [
+                    instrument
+                    for instrument in instruments
+                    if all(pitch in playable[instrument.name] for pitch in melody_pitches)
+                ]
+                if melody_instruments:
+                    candidates.append(
+                        (
+                            root,
+                            bass_pitch,
+                            melody_pitches,
+                            chord_instruments,
+                            melody_instruments,
+                        )
+                    )
+
+        if not candidates:
+            return None
+
+        (
+            root,
+            bass_pitch,
+            melody_pitches,
+            chord_instruments,
+            melody_instruments,
+        ) = random.choice(candidates)
+        return (
+            chord_instruments,
+            random.choice(melody_instruments),
+            root,
+            bass_pitch,
+            melody_pitches,
+        )
+
+    @staticmethod
+    def _bass_pitch_below_exercise(
+        root: int,
+        chord_pitches: tuple[int, ...],
+        melody_pitches: tuple[int, ...],
+    ) -> int:
+        lowest_other_pitch = min(*chord_pitches, *melody_pitches)
+        bass_pitch = root - 12
+        while bass_pitch >= lowest_other_pitch:
+            bass_pitch -= 12
+        return bass_pitch
+
+    @staticmethod
+    def _registers_match(
+        chord_pitches: tuple[int, ...],
+        melody_pitches: tuple[int, ...],
+        register: str,
+    ) -> bool:
+        if register == "Harmony Low / Melody High":
+            return max(chord_pitches) < min(melody_pitches)
+        if register == "Harmony High / Melody Low":
+            return max(melody_pitches) < min(chord_pitches)
+        return max(min(chord_pitches), min(melody_pitches)) <= min(
+            max(chord_pitches),
+            max(melody_pitches),
+        )
+
+    @staticmethod
+    def _build_scale_tension_notes(
+        harmony_pitches: tuple[int, ...],
+        harmony_programs: tuple[int, ...],
+        melody_pitches: tuple[int, ...],
+        melody_program: int,
+        timing: dict[str, int],
+    ) -> list[MidiNote]:
+        chord_start = timing["tension_bass_lead_in"]
+        melody_start = chord_start + timing["tension_lead_in"]
+        melody_end = (
+            melody_start
+            + ((len(melody_pitches) - 1) * timing["tension_step"])
+            + timing["tension_note"]
+        )
+        bass_pitch, *chord_pitches = harmony_pitches
+        bass_program, *chord_programs = harmony_programs
+        notes = [
+            MidiNote(
+                start=0,
+                duration=melody_end,
+                pitch=bass_pitch,
+                velocity=68,
+                program=bass_program,
+            )
+        ]
+        notes.extend(
+            MidiNote(
+                start=chord_start,
+                duration=melody_end - chord_start,
+                pitch=pitch,
+                velocity=54,
+                program=program,
+            )
+            for pitch, program in zip(chord_pitches, chord_programs)
+        )
+        notes.extend(
+            MidiNote(
+                start=melody_start + (index * timing["tension_step"]),
+                duration=timing["tension_note"],
+                pitch=pitch,
+                velocity=104,
+                program=melody_program,
+            )
+            for index, pitch in enumerate(melody_pitches)
+        )
+        return notes
+
+    def _answer(self, answer: str) -> None:
+        if not self.running or self.current is None:
+            return
+
+        expected_count = len(self.current.answer_sequence)
+        if len(self.selected_tensions) >= expected_count:
+            self.status_var.set("Review the answer or clear it to try another sequence")
+            return
+
+        self.selected_tensions.append(answer)
+        self._update_answer_progress()
+        if len(self.selected_tensions) < expected_count:
+            self.status_var.set("Complete the sequence in the order you heard it")
+            return
+
+        selected = tuple(self.selected_tensions)
+        correct = selected == self.current.answer_sequence
+        previous_correct = self.current_marked_correct
+        if previous_correct is None:
+            self.total_count += 1
+            if correct:
+                self.correct_count += 1
+        elif previous_correct != correct:
+            self.correct_count += 1 if correct else -1
+        self.current_marked_answer = ", ".join(selected)
+        self.current_marked_correct = correct
+        self.score_var.set(self._score_text())
+        if correct:
+            self.feedback_var.set(f"Correct: {self.current.answer}")
+        else:
+            self.feedback_var.set(
+                f"Selected: {self.current_marked_answer}; correct answer: {self.current.answer}"
+            )
+        self.status_var.set("Review the answer")
+        self.next_button.configure(state=tk.NORMAL)
+
+    def _undo_tension(self) -> None:
+        if not self.running or not self.selected_tensions:
+            return
+        self.selected_tensions.pop()
+        self._update_answer_progress()
+        self.status_var.set("Complete the sequence in the order you heard it")
+
+    def _clear_tensions(self) -> None:
+        if not self.running:
+            return
+        self.selected_tensions = []
+        self._update_answer_progress()
+        self.status_var.set("Complete the sequence in the order you heard it")
+
+    def _update_answer_progress(self) -> None:
+        if self.current is None or not self.running:
+            self.answer_progress_var.set("Your answer: -")
+            return
+        selected = ", ".join(self.selected_tensions) or "-"
+        self.answer_progress_var.set(
+            f"Your answer: {selected}  ({len(self.selected_tensions)}/"
+            f"{len(self.current.answer_sequence)})"
+        )
+
+
 class HarmonyTrainerTab(BaseTrainerTab):
     def __init__(
         self,
@@ -1457,6 +2353,16 @@ class HarmonyTrainerTab(BaseTrainerTab):
         if not self._active_harmony_modes():
             self.status_var.set("Select at least one mode")
             return
+        if self.mix_instruments_var.get():
+            required_instruments = max(
+                (len(definition.semitones) for definition in self._active_definitions()),
+                default=0,
+            )
+            if len(self._active_instruments()) < required_instruments:
+                self.status_var.set(
+                    f"Mix needs at least {required_instruments} selected instruments"
+                )
+                return
         super()._start()
 
     def _sync_answer_buttons_with_selection(self) -> None:
@@ -1520,7 +2426,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         offset_sets = [
             self._apply_inversion(definition.semitones, inversion)
             for definition in active_definitions
-            for inversion in self._active_inversions(len(definition.semitones))
+            for inversion in self._active_inversions_for_definition(definition)
         ]
         voice_count = max((len(offsets) for offsets in offset_sets), default=0)
         if voice_count == 0:
@@ -1539,7 +2445,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
             instrument.name: self._playable_pitches_for_instrument(instrument)
             for instrument in instruments
         }
-        candidates: list[tuple[int, list[list[InstrumentDefinition]]]] = []
+        candidates: list[tuple[int, list[InstrumentDefinition]]] = []
         for root in range(128):
             eligible_by_voice = [
                 [
@@ -1552,25 +2458,19 @@ class HarmonyTrainerTab(BaseTrainerTab):
                 ]
                 for voice_offsets in offsets_by_voice
             ]
-            if all(eligible_by_voice):
-                candidates.append((root, eligible_by_voice))
+            voice_instruments = _choose_distinct_voice_instruments(eligible_by_voice)
+            if voice_instruments is not None:
+                candidates.append((root, voice_instruments))
 
         if not candidates:
             raise NoPlayableRangeError(
                 "No selected instrument mix can play every note in the current selection"
             )
 
-        pitch_class = random.choice(sorted({root % 12 for root, _options in candidates}))
-        root, eligible_by_voice = random.choice(
+        pitch_class = random.choice(sorted({root % 12 for root, _voices in candidates}))
+        root, voice_instruments = random.choice(
             [candidate for candidate in candidates if candidate[0] % 12 == pitch_class]
         )
-        voice_instruments: list[InstrumentDefinition] = []
-        used_names: set[str] = set()
-        for eligible in eligible_by_voice:
-            unused = [instrument for instrument in eligible if instrument.name not in used_names]
-            instrument = random.choice(unused or eligible)
-            voice_instruments.append(instrument)
-            used_names.add(instrument.name)
         return voice_instruments, root
 
     def _actual_harmony_mode(self) -> str:
@@ -1579,7 +2479,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
     def _definition_challenge_count(self, definition: MusicDefinition) -> int:
         answer_counts = [
             self._answer_challenge_count(self._answer_name(definition, inversion))
-            for inversion in self._active_inversions(len(definition.semitones))
+            for inversion in self._active_inversions_for_definition(definition)
         ]
         return min(answer_counts, default=0)
 
@@ -1587,7 +2487,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         return self._active_answer_names()
 
     def _choose_inversion(self, definition: MusicDefinition) -> int:
-        inversions = self._active_inversions(len(definition.semitones))
+        inversions = self._active_inversions_for_definition(definition)
         return _weighted_choice_by_count(
             inversions,
             lambda inversion: self._answer_challenge_count(
@@ -1605,7 +2505,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
     ) -> dict[str, list[MidiNote]]:
         answer_notes: dict[str, list[MidiNote]] = {}
         for definition in active_definitions or self._active_definitions():
-            for inversion in self._active_inversions(len(definition.semitones)):
+            for inversion in self._active_inversions_for_definition(definition):
                 answer_name = self._answer_name(definition, inversion)
                 semitones = self._apply_inversion(definition.semitones, inversion)
                 answer_notes[answer_name] = self._build_harmony_notes(
@@ -1623,7 +2523,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
     ) -> list[int]:
         offsets = [0]
         for definition in active_definitions:
-            for inversion in self._active_inversions(len(definition.semitones)):
+            for inversion in self._active_inversions_for_definition(definition):
                 offsets.extend(self._apply_inversion(definition.semitones, inversion))
         return offsets
 
@@ -1656,10 +2556,13 @@ class HarmonyTrainerTab(BaseTrainerTab):
                 for semitone, program in voices
             ]
 
+        chord_end = ((len(voices) - 1) * timing["melodic_step"]) + timing[
+            "harmony_chord"
+        ]
         return [
             MidiNote(
                 start=index * timing["melodic_step"],
-                duration=timing["melodic_note"],
+                duration=chord_end - (index * timing["melodic_step"]),
                 pitch=root + semitone,
                 velocity=84,
                 program=program,
@@ -1682,7 +2585,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         return [
             definition
             for definition in super()._active_definitions()
-            if self._active_inversions(len(definition.semitones))
+            if self._active_inversions_for_definition(definition)
         ]
 
     def _active_inversions(self, note_count: int) -> list[int]:
@@ -1693,16 +2596,36 @@ class HarmonyTrainerTab(BaseTrainerTab):
             if degree <= max_inversion and self.inversion_vars[label].get()
         ]
 
+    def _active_inversions_for_definition(
+        self,
+        definition: MusicDefinition,
+    ) -> list[int]:
+        active_inversions = self._active_inversions(len(definition.semitones))
+        if self._is_inversionally_symmetric(definition.semitones):
+            return [0] if 0 in active_inversions else []
+        return active_inversions
+
+    def _is_inversionally_symmetric(self, semitones: tuple[int, ...]) -> bool:
+        if len(semitones) < 2:
+            return False
+        normalized_root = tuple(
+            semitone - semitones[0] for semitone in semitones
+        )
+        for inversion in range(1, len(semitones)):
+            inverted = self._apply_inversion(semitones, inversion)
+            normalized_inversion = tuple(
+                semitone - inverted[0] for semitone in inverted
+            )
+            if normalized_inversion != normalized_root:
+                return False
+        return True
+
     def _active_answer_names(self) -> list[str]:
         names: list[str] = []
         active_definitions = self._active_definitions()
-        max_note_count = max(
-            (len(definition.semitones) for definition in active_definitions),
-            default=0,
-        )
-        for inversion in self._active_inversions(max_note_count):
+        for _label, inversion in HARMONY_INVERSION_OPTIONS:
             for definition in active_definitions:
-                if inversion <= len(definition.semitones) - 1:
+                if inversion in self._active_inversions_for_definition(definition):
                     names.append(self._answer_name(definition, inversion))
         return names
 

@@ -1,0 +1,4 @@
+scales:
+  Diatonic Major: "1, 2, 3, 4, 5, 6, 7"
+  Harmonic Minor: "1, 2, b3, 4, 5, b6, 7"
+  Melodic Minor: "1, 2, b3, 4, 5, 6, 7"

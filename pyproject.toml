@@ -1,7 +1,7 @@
 [project]
 name = "relative-ear-trainer"
 version = "0.1.0"
-description = "A Python Tk desktop app for MIDI relative ear training, interval recognition, chord inversions, and harmonic function practice."
+description = "A Python Tk desktop app for MIDI relative ear training, scale tensions, interval recognition, chord inversions, and harmonic function practice."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -12,6 +12,7 @@ keywords = [
   "relative pitch",
   "relative ear trainer",
   "interval trainer",
+  "scale tension ear training",
   "chord ear training",
   "chord inversions",
   "harmonic function",
