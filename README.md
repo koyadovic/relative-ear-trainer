@@ -13,12 +13,12 @@ trainer, or configurable MIDI ear training tool.
 
 - Interval ear training across two octaves with selectable ascending,
   descending, and harmonic modes.
-- Scale-tension training over sustained diatonic tertian or quartal harmonies,
-  with ordered three-, four-, or five-note melody answers.
-- Harmony training for triads, seventh chords, extensions, altered chords,
-  inversions, and selectable playback modes.
+- Harmony training for triads, seventh chords, extensions, altered chords, and
+  inversions, with harmonic and ascending replays.
 - Optional harmonic function training with configurable roman-numeral
   progressions.
+- Scale-tension training over sustained diatonic tertian or quartal harmonies,
+  with ordered one- to five-note melody answers.
 - YAML-based exercises for adding custom intervals, scales, chords, and progressions.
 - Multi-select General MIDI instruments including piano, guitar, violin,
   vibraphone, marimba, flute, oboe, saxophone, trumpet, and sitar.
@@ -103,20 +103,21 @@ Each challenge builds a two-, three-, or four-note diatonic harmony by thirds
 (`1-3`, `1-3-5`, `1-3-5-7`) or fourths (`1-4`, `1-4-7`, `1-4-7-3`), with the
 root reinforced in the nearest lower octave that remains below both chord and
 melody, without counting as another chord note. A dedicated General MIDI
-fingered bass enters first and sustains, the chord then joins it quietly, and
-the scale melody finally starts over both. With `Mix` enabled, each chord voice
-is assigned a different selected instrument. Answers are chord-root tensions
-and must be entered in the order heard. The twelve answer choices cover `1`
-through `7`, including every chromatic alteration; octave position is
-intentionally ignored.
+fingered bass and the chord enter together and sustain, then the scale melody
+starts over both. Melodies can contain one to five notes. With `Mix` enabled,
+each chord voice is assigned a different selected instrument. Answers are
+chord-root tensions and must be entered in the order heard. The twelve answer
+choices cover `1` through `7`, including every chromatic alteration; octave
+position is intentionally ignored.
 
 Harmony answers include the chord quality plus the active voicing formula. For
 example, a root-position major seventh appears as `Maj7 (1, 3, 5, 7)`, while
 its first inversion appears as `Maj7 (3, 5, 7, 1)`. Symmetrical chords such as
 augmented triads and diminished sevenths expose only root position because
-their inversions are indistinguishable without external tonal context. In
-ascending and descending modes, chord voices enter in order and remain held as
-later voices join.
+their inversions are indistinguishable without external tonal context. Every
+challenge is presented harmonically. It can be replayed either harmonically or
+as an ascending rolled chord, where each voice remains held as later voices
+join.
 
 Instruments use General MIDI program numbers plus a comfortable note range:
 
@@ -145,10 +146,10 @@ that cannot be measured use the central part of the YAML range instead.
 ## Saved Practice Sets
 
 The app remembers the last UI settings for each training tab: selected material,
-selected instruments, playback duration, interval modes, harmony modes, active
-harmony inversions, scale-tension options, and the active tab. This lets you
-start with a small group, consolidate it, and gradually add more material
-without rebuilding the same setup every time.
+selected instruments, playback duration, interval modes, active harmony
+inversions, scale-tension options, and the active tab. This lets you start with
+a small group, consolidate it, and gradually add more material without
+rebuilding the same setup every time.
 
 Interval, harmony, and harmonic-function answers also track persistent attempts,
 correct answers, and accuracy percentage. Scale-tension scoring is intentionally
@@ -168,14 +169,14 @@ backend configuration changes.
 
 ## Feature Flags
 
-The app shows interval, scale-tension, and harmony training by default. The
+The app shows interval, harmony, and scale-tension training by default. The
 harmonic function trainer is still available but hidden while it is being
 refined.
 
 Enable specific tabs with `EAR_TRAINER_TABS`:
 
 ```bash
-EAR_TRAINER_TABS=intervals,tensions,harmonies,progressions ./app.sh
+EAR_TRAINER_TABS=intervals,harmonies,progressions,tensions ./app.sh
 ```
 
 Supported tab keys are `intervals`, `tensions`, `harmonies`, and `progressions`.

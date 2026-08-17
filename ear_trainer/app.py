@@ -34,8 +34,8 @@ TAB_INTERVALS = "intervals"
 TAB_TENSIONS = "tensions"
 TAB_HARMONIES = "harmonies"
 TAB_PROGRESSIONS = "progressions"
-AVAILABLE_TAB_KEYS = (TAB_INTERVALS, TAB_TENSIONS, TAB_HARMONIES, TAB_PROGRESSIONS)
-DEFAULT_ENABLED_TAB_KEYS = (TAB_INTERVALS, TAB_TENSIONS, TAB_HARMONIES)
+AVAILABLE_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES, TAB_PROGRESSIONS, TAB_TENSIONS)
+DEFAULT_ENABLED_TAB_KEYS = (TAB_INTERVALS, TAB_HARMONIES, TAB_TENSIONS)
 T = TypeVar("T")
 ChallengeSignature = tuple[int, tuple[tuple[int, int, int, int, int], ...]]
 MAX_DISTINCT_CHALLENGE_ATTEMPTS = 50
@@ -61,7 +61,7 @@ TENSION_HARMONY_TYPES = ("Thirds", "Fourths")
 TENSION_HARMONY_DEGREE_STEPS = {"Thirds": 2, "Fourths": 3}
 TENSION_HARMONY_NOTE_COUNTS = ("2", "3", "4")
 TENSION_MELODY_MOTIONS = ("Conjunct", "Disjunct")
-TENSION_NOTE_COUNTS = ("3", "4", "5")
+TENSION_NOTE_COUNTS = ("1", "2", "3", "4", "5")
 TENSION_BASS_INSTRUMENT = InstrumentDefinition(
     name="Fingered Bass",
     program=33,
@@ -90,7 +90,6 @@ DURATION_PROFILES = {
         "harmony_chord": 1280,
         "progression_chord": 760,
         "progression_step": 920,
-        "tension_bass_lead_in": 420,
         "tension_lead_in": 620,
         "tension_note": 360,
         "tension_step": 440,
@@ -102,7 +101,6 @@ DURATION_PROFILES = {
         "harmony_chord": 1700,
         "progression_chord": 1100,
         "progression_step": 1280,
-        "tension_bass_lead_in": 620,
         "tension_lead_in": 960,
         "tension_note": 520,
         "tension_step": 640,
@@ -114,7 +112,6 @@ DURATION_PROFILES = {
         "harmony_chord": 2400,
         "progression_chord": 1600,
         "progression_step": 1850,
-        "tension_bass_lead_in": 900,
         "tension_lead_in": 1360,
         "tension_note": 760,
         "tension_step": 900,
@@ -203,6 +200,7 @@ class Challenge:
     program: int
     notes: list[MidiNote]
     answer_notes: dict[str, list[MidiNote]]
+    replay_notes: dict[str, list[MidiNote]] | None = None
     answer_sequence: tuple[str, ...] = ()
     balance_keys: tuple[str, ...] = ()
 
@@ -1451,7 +1449,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
             list(TENSION_NOTE_COUNTS),
         )
         if selected_note_counts is None:
-            selected_note_counts = {TENSION_NOTE_COUNTS[0]}
+            selected_note_counts = {"3"}
         self.note_count_vars = {
             count: tk.BooleanVar(master=parent, value=count in selected_note_counts)
             for count in TENSION_NOTE_COUNTS
@@ -2083,8 +2081,8 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
         melody_program: int,
         timing: dict[str, int],
     ) -> list[MidiNote]:
-        chord_start = timing["tension_bass_lead_in"]
-        melody_start = chord_start + timing["tension_lead_in"]
+        harmony_start = 0
+        melody_start = timing["tension_lead_in"]
         melody_end = (
             melody_start
             + ((len(melody_pitches) - 1) * timing["tension_step"])
@@ -2103,8 +2101,8 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
         ]
         notes.extend(
             MidiNote(
-                start=chord_start,
-                duration=melody_end - chord_start,
+                start=harmony_start,
+                duration=melody_end - harmony_start,
                 pitch=pitch,
                 velocity=54,
                 program=program,
@@ -2194,25 +2192,6 @@ class HarmonyTrainerTab(BaseTrainerTab):
         definitions: tuple[MusicDefinition, ...],
         on_start: Callable[[BaseTrainerTab], None] | None,
     ) -> None:
-        selected_modes = settings.selected_values(
-            "harmonies",
-            "modes",
-            list(INTERVAL_MODES),
-        )
-        if selected_modes is None:
-            legacy_mode = settings.option(
-                "harmonies",
-                "mode",
-                [*INTERVAL_MODES, RANDOM_LABEL],
-                "Harmonic",
-            )
-            selected_modes = (
-                set(INTERVAL_MODES) if legacy_mode == RANDOM_LABEL else {legacy_mode}
-            )
-        self.harmony_mode_vars = {
-            mode: tk.BooleanVar(master=parent, value=mode in selected_modes)
-            for mode in INTERVAL_MODES
-        }
         self.mix_instruments_var = tk.BooleanVar(
             master=parent,
             value=settings.boolean_option("harmonies", "mix_instruments", False),
@@ -2251,7 +2230,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         ttk.Label(header, text=self.title, style="Header.TLabel").grid(
             row=0,
             column=0,
-            rowspan=4,
+            rowspan=2,
             sticky="w",
         )
         timbre_frame = ttk.LabelFrame(header, text="Instrument", padding=8)
@@ -2266,19 +2245,11 @@ class HarmonyTrainerTab(BaseTrainerTab):
         mix_checkbutton.grid(row=mix_row, column=0, padx=4, pady=(6, 0), sticky="w")
         self.selection_controls.append(mix_checkbutton)
 
-        mode_frame = ttk.LabelFrame(header, text="Mode", padding=8)
-        mode_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
-        for column, label in enumerate(INTERVAL_MODES):
-            checkbutton = ttk.Checkbutton(
-                mode_frame,
-                text=label,
-                variable=self.harmony_mode_vars[label],
-            )
-            checkbutton.grid(row=0, column=column, padx=4)
-            self.selection_controls.append(checkbutton)
+        options_frame = ttk.Frame(header)
+        options_frame.grid(row=1, column=1, sticky="e", pady=(6, 0))
 
-        inversion_frame = ttk.LabelFrame(header, text="Inversions", padding=8)
-        inversion_frame.grid(row=2, column=1, sticky="e", pady=(6, 0))
+        inversion_frame = ttk.LabelFrame(options_frame, text="Inversions", padding=8)
+        inversion_frame.grid(row=0, column=0, sticky="e")
         for column, (label, _degree) in enumerate(HARMONY_INVERSION_OPTIONS):
             checkbutton = ttk.Checkbutton(
                 inversion_frame,
@@ -2288,8 +2259,8 @@ class HarmonyTrainerTab(BaseTrainerTab):
             checkbutton.grid(row=0, column=column, padx=4)
             self.selection_controls.append(checkbutton)
 
-        duration_frame = ttk.LabelFrame(header, text="Duration", padding=8)
-        duration_frame.grid(row=3, column=1, sticky="e", pady=(6, 0))
+        duration_frame = ttk.LabelFrame(options_frame, text="Duration", padding=8)
+        duration_frame.grid(row=0, column=1, sticky="e", padx=(6, 0))
         for column, label in enumerate(DURATION_LABELS):
             ttk.Radiobutton(
                 duration_frame,
@@ -2320,10 +2291,65 @@ class HarmonyTrainerTab(BaseTrainerTab):
                 )
                 self.answer_buttons[answer_name] = button
 
+    def _build_controls(self) -> None:
+        footer = ttk.Frame(self)
+        footer.grid(row=3, column=0, sticky="ew")
+        footer.columnconfigure(4, weight=1)
+
+        self.start_button = ttk.Button(footer, text="Start", command=self._toggle_running)
+        self.start_button.grid(row=0, column=0, padx=(0, 6))
+        self.replay_button = ttk.Button(
+            footer,
+            text="Replay Harmonic (F7)",
+            command=self._replay_current,
+            state=tk.DISABLED,
+        )
+        self.replay_button.grid(row=0, column=1, padx=(0, 6))
+        self.ascending_replay_button = ttk.Button(
+            footer,
+            text="Replay Ascending",
+            command=self._replay_ascending_current,
+            state=tk.DISABLED,
+        )
+        self.ascending_replay_button.grid(row=0, column=2, padx=(0, 6))
+        self.next_button = ttk.Button(
+            footer,
+            text="Next (F8)",
+            command=self._next_challenge,
+            state=tk.DISABLED,
+        )
+        self.next_button.grid(row=0, column=3, padx=(0, 6))
+        ttk.Label(footer, textvariable=self.score_var).grid(row=0, column=5, sticky="e")
+        self.reset_stats_button = ttk.Button(
+            footer,
+            text="Reset Stats",
+            command=self._reset_stats,
+        )
+        self.reset_stats_button.grid(row=0, column=6, padx=(10, 0), sticky="e")
+        message_row = ttk.Frame(footer)
+        message_row.grid(
+            row=1,
+            column=0,
+            columnspan=7,
+            sticky="ew",
+            pady=(6, 0),
+        )
+        ttk.Label(
+            message_row,
+            textvariable=self.status_var,
+            style="Result.TLabel",
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            message_row,
+            textvariable=self.feedback_var,
+            style="Result.TLabel",
+        ).pack(
+            side=tk.LEFT,
+            padx=(12, 0),
+        )
+
     def _bind_selection_persistence(self) -> None:
         super()._bind_selection_persistence()
-        for variable in self.harmony_mode_vars.values():
-            variable.trace_add("write", lambda *_args: self._queue_settings_save())
         for variable in self.inversion_vars.values():
             variable.trace_add(
                 "write",
@@ -2341,18 +2367,11 @@ class HarmonyTrainerTab(BaseTrainerTab):
             if self.inversion_vars[label].get()
         ]
         return {
-            "modes": self._active_harmony_modes(),
             "inversions": selected_inversions,
             "mix_instruments": self.mix_instruments_var.get(),
         }
 
-    def _active_harmony_modes(self) -> list[str]:
-        return [mode for mode in INTERVAL_MODES if self.harmony_mode_vars[mode].get()]
-
     def _start(self) -> None:
-        if not self._active_harmony_modes():
-            self.status_var.set("Select at least one mode")
-            return
         if self.mix_instruments_var.get():
             required_instruments = max(
                 (len(definition.semitones) for definition in self._active_definitions()),
@@ -2364,6 +2383,23 @@ class HarmonyTrainerTab(BaseTrainerTab):
                 )
                 return
         super()._start()
+        if self.running:
+            self.ascending_replay_button.configure(state=tk.NORMAL)
+
+    def stop_training(self) -> None:
+        super().stop_training()
+        self.ascending_replay_button.configure(state=tk.DISABLED)
+
+    def _replay_ascending_current(self) -> None:
+        if self.current is None or self.current.replay_notes is None:
+            return
+        notes = self.current.replay_notes.get("Ascending")
+        if not notes:
+            return
+        try:
+            self.player.play(program=self.current.program, notes=notes)
+        except PlaybackError as exc:
+            self.status_var.set(str(exc))
 
     def _sync_answer_buttons_with_selection(self) -> None:
         active_answers = self._active_answer_names()
@@ -2403,20 +2439,27 @@ class HarmonyTrainerTab(BaseTrainerTab):
             program = instrument.program
             voice_programs = None
         inversion = self._choose_inversion(definition)
-        mode = self._actual_harmony_mode()
         answer_notes = self._build_harmony_answer_notes(
             root=root,
             timing=timing,
-            mode=mode,
+            mode="Harmonic",
             active_definitions=active_definitions,
             voice_programs=voice_programs,
         )
         answer = self._answer_name(definition, inversion)
+        ascending_notes = self._build_harmony_notes(
+            root=root,
+            semitones=self._apply_inversion(definition.semitones, inversion),
+            timing=timing,
+            mode="Ascending",
+            voice_programs=voice_programs,
+        )
         return Challenge(
             answer=answer,
             program=program,
             notes=answer_notes[answer],
             answer_notes=answer_notes,
+            replay_notes={"Ascending": ascending_notes},
         )
 
     def _choose_harmony_instruments_and_root(
@@ -2472,9 +2515,6 @@ class HarmonyTrainerTab(BaseTrainerTab):
             [candidate for candidate in candidates if candidate[0] % 12 == pitch_class]
         )
         return voice_instruments, root
-
-    def _actual_harmony_mode(self) -> str:
-        return random.choice(self._active_harmony_modes())
 
     def _definition_challenge_count(self, definition: MusicDefinition) -> int:
         answer_counts = [
@@ -2535,7 +2575,7 @@ class HarmonyTrainerTab(BaseTrainerTab):
         mode: str | None = None,
         voice_programs: list[int] | None = None,
     ) -> list[MidiNote]:
-        mode = mode or self._actual_harmony_mode()
+        mode = mode or "Harmonic"
         programs: list[int | None] = (
             [*voice_programs[: len(semitones)]]
             if voice_programs is not None
