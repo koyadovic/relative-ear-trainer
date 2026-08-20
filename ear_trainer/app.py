@@ -60,6 +60,10 @@ TENSION_ANSWERS = (
 TENSION_HARMONY_TYPES = ("Thirds", "Fourths")
 TENSION_HARMONY_DEGREE_STEPS = {"Thirds": 2, "Fourths": 3}
 TENSION_HARMONY_NOTE_COUNTS = ("2", "3", "4")
+TENSION_SCALE_DEGREES = ("I", "II", "III", "IV", "V", "VI", "VII")
+TENSION_SCALE_DEGREE_INDEX = {
+    label: index for index, label in enumerate(TENSION_SCALE_DEGREES)
+}
 TENSION_MELODY_MOTIONS = ("Conjunct", "Disjunct")
 TENSION_NOTE_COUNTS = ("1", "2", "3", "4", "5")
 TENSION_BASS_INSTRUMENT = InstrumentDefinition(
@@ -73,6 +77,7 @@ TENSION_REGISTER_OPTIONS = (
     "Harmony High / Melody Low",
     "Overlap",
 )
+TENSION_HARMONY_SETTLE_TICKS = 1360
 PLAYABLE_PITCH_EDGE_MARGIN = 12
 DURATION_LABELS = ("Short", "Medium", "Long")
 DEFAULT_DURATION_LABEL = "Medium"
@@ -90,9 +95,8 @@ DURATION_PROFILES = {
         "harmony_chord": 1280,
         "progression_chord": 760,
         "progression_step": 920,
-        "tension_lead_in": 620,
-        "tension_note": 360,
-        "tension_step": 440,
+        "tension_note": 760,
+        "tension_step": 900,
     },
     "Medium": {
         "melodic_note": 620,
@@ -101,9 +105,8 @@ DURATION_PROFILES = {
         "harmony_chord": 1700,
         "progression_chord": 1100,
         "progression_step": 1280,
-        "tension_lead_in": 960,
-        "tension_note": 520,
-        "tension_step": 640,
+        "tension_note": 1200,
+        "tension_step": 1400,
     },
     "Long": {
         "melodic_note": 900,
@@ -112,9 +115,8 @@ DURATION_PROFILES = {
         "harmony_chord": 2400,
         "progression_chord": 1600,
         "progression_step": 1850,
-        "tension_lead_in": 1360,
-        "tension_note": 760,
-        "tension_step": 900,
+        "tension_note": 1800,
+        "tension_step": 2100,
     },
 }
 
@@ -1404,6 +1406,18 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
             for name in scale_names
         }
 
+        selected_degrees = settings.selected_values(
+            "tensions",
+            "degrees",
+            list(TENSION_SCALE_DEGREES),
+        )
+        if selected_degrees is None:
+            selected_degrees = set(TENSION_SCALE_DEGREES)
+        self.degree_vars = {
+            degree: tk.BooleanVar(master=parent, value=degree in selected_degrees)
+            for degree in TENSION_SCALE_DEGREES
+        }
+
         selected_harmony_types = settings.selected_values(
             "tensions",
             "harmony_types",
@@ -1498,7 +1512,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
         ttk.Label(header, text=self.title, style="Header.TLabel").grid(
             row=0,
             column=0,
-            rowspan=4,
+            rowspan=5,
             sticky="nw",
             padx=(0, 10),
         )
@@ -1597,9 +1611,26 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
             checkbutton.grid(row=0, column=column, padx=4)
             self.selection_controls.append(checkbutton)
 
+        degree_frame = ttk.LabelFrame(options, text="Harmony degree", padding=8)
+        degree_frame.grid(
+            row=3,
+            column=0,
+            columnspan=4,
+            sticky="e",
+            pady=(6, 0),
+        )
+        for column, degree in enumerate(TENSION_SCALE_DEGREES):
+            checkbutton = ttk.Checkbutton(
+                degree_frame,
+                text=degree,
+                variable=self.degree_vars[degree],
+            )
+            checkbutton.grid(row=0, column=column, padx=4)
+            self.selection_controls.append(checkbutton)
+
         register_frame = ttk.LabelFrame(options, text="Registers", padding=8)
         register_frame.grid(
-            row=3,
+            row=4,
             column=0,
             columnspan=4,
             sticky="e",
@@ -1694,6 +1725,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
         super()._bind_selection_persistence()
         variables = [
             *self.scale_vars.values(),
+            *self.degree_vars.values(),
             *self.harmony_type_vars.values(),
             *self.harmony_note_count_vars.values(),
             *self.melody_motion_vars.values(),
@@ -1707,6 +1739,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
     def _extra_settings_payload(self) -> dict[str, str | bool | list[str]]:
         return {
             "scales": self._active_scale_names(),
+            "degrees": self._active_degrees(),
             "harmony_types": self._active_harmony_types(),
             "harmony_note_counts": self._active_harmony_note_counts(),
             "melody_motions": self._active_melody_motions(),
@@ -1717,6 +1750,11 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
 
     def _active_scale_names(self) -> list[str]:
         return [scale.name for scale in self.scales if self.scale_vars[scale.name].get()]
+
+    def _active_degrees(self) -> list[str]:
+        return [
+            degree for degree in TENSION_SCALE_DEGREES if self.degree_vars[degree].get()
+        ]
 
     def _active_harmony_types(self) -> list[str]:
         return [
@@ -1741,6 +1779,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
     def _start(self) -> None:
         required_groups = (
             (self._active_scale_names(), "Select at least one scale"),
+            (self._active_degrees(), "Select at least one harmony degree"),
             (self._active_harmony_types(), "Select at least one harmony type"),
             (
                 self._active_harmony_note_counts(),
@@ -1793,6 +1832,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
     def _initial_challenge_counts(self) -> dict[str, int]:
         option_groups = {
             "scale": self._active_scale_names(),
+            "degree": self._active_degrees(),
             "harmony": self._active_harmony_types(),
             "harmony_notes": self._active_harmony_note_counts(),
             "motion": self._active_melody_motions(),
@@ -1823,6 +1863,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
 
         for _attempt in range(160):
             scale_name = self._balanced_option("scale", self._active_scale_names())
+            degree_label = self._balanced_option("degree", self._active_degrees())
             harmony_type = self._balanced_option(
                 "harmony",
                 self._active_harmony_types(),
@@ -1837,7 +1878,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
             note_count = int(note_count_label)
             scale = scales_by_name[scale_name]
             tonic_pitch_class = random.randrange(12)
-            chord_degree = random.randrange(7)
+            chord_degree = TENSION_SCALE_DEGREE_INDEX[degree_label]
             harmony_step = TENSION_HARMONY_DEGREE_STEPS[harmony_type]
             chord_offsets = self._stacked_scale_offsets(
                 scale.semitones,
@@ -1890,6 +1931,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
                 answer_sequence=answer_sequence,
                 balance_keys=(
                     f"scale:{scale_name}",
+                    f"degree:{degree_label}",
                     f"harmony:{harmony_type}",
                     f"harmony_notes:{harmony_note_count_label}",
                     f"motion:{motion}",
@@ -2082,7 +2124,7 @@ class ScaleTensionTrainerTab(BaseTrainerTab):
         timing: dict[str, int],
     ) -> list[MidiNote]:
         harmony_start = 0
-        melody_start = timing["tension_lead_in"]
+        melody_start = TENSION_HARMONY_SETTLE_TICKS
         melody_end = (
             melody_start
             + ((len(melody_pitches) - 1) * timing["tension_step"])

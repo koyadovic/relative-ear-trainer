@@ -101,14 +101,16 @@ scales:
 
 Each challenge builds a two-, three-, or four-note diatonic harmony by thirds
 (`1-3`, `1-3-5`, `1-3-5-7`) or fourths (`1-4`, `1-4-7`, `1-4-7-3`), with the
-root reinforced in the nearest lower octave that remains below both chord and
-melody, without counting as another chord note. A dedicated General MIDI
-fingered bass and the chord enter together and sustain, then the scale melody
-starts over both. Melodies can contain one to five notes. With `Mix` enabled,
-each chord voice is assigned a different selected instrument. Answers are
-chord-root tensions and must be entered in the order heard. The twelve answer
-choices cover `1` through `7`, including every chromatic alteration; octave
-position is intentionally ignored.
+selected harmony root chosen from scale degrees `I` through `VII`. The root is
+reinforced in the nearest lower octave that remains below both chord and melody,
+without counting as another chord note. A dedicated General MIDI fingered bass
+and the chord enter together and sustain, then the scale melody starts over
+both. Melodies can contain one to five notes. With `Mix` enabled, each chord
+voice is assigned a different selected instrument. Answers are chord-root
+tensions and must be entered in the order heard. The twelve answer choices cover
+`1` through `7`, including every chromatic alteration; octave position is
+intentionally ignored. The `Duration` setting starts with the scale melody; the
+fixed settling time for bass and harmony is not deducted from it.
 
 Harmony answers include the chord quality plus the active voicing formula. For
 example, a root-position major seventh appears as `Maj7 (1, 3, 5, 7)`, while
